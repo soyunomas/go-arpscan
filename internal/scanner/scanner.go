@@ -8,12 +8,14 @@ import (
 	"go-arpscan/internal/oui"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/pcapgo"
 )
 
 type ScanResult struct {
@@ -35,6 +37,7 @@ type Config struct {
 	BackoffFactor float64
 	ArpSPA        net.IP
 	Verbosity     int
+	PcapSaveFile  string // <-- Nuevo Campo
 }
 
 type targetStatus int
@@ -80,6 +83,26 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		defer close(results)
 		defer handle.Close()
 
+		// <-- INICIO BLOQUE MODIFICADO: LÓGICA PARA PCAP WRITER -->
+		var pcapWriter *pcapgo.Writer
+		if cfg.PcapSaveFile != "" {
+			f, err := os.Create(cfg.PcapSaveFile)
+			if err != nil {
+				// No podemos devolver el error directamente, pero podemos loguearlo y continuar
+				log.Printf("CRÍTICO: No se pudo crear el archivo pcap '%s': %v. El escaneo continuará sin guardar.", cfg.PcapSaveFile, err)
+			} else {
+				// Defer close para asegurar que el fichero se cierra al final de la goroutine
+				defer f.Close()
+				pcapWriter = pcapgo.NewWriter(f)
+				// Escribir la cabecera del fichero pcap es crucial
+				if err := pcapWriter.WriteFileHeader(65536, handle.LinkType()); err != nil {
+					log.Printf("CRÍTICO: No se pudo escribir la cabecera del archivo pcap: %v.", err)
+					pcapWriter = nil // Desactivar la escritura si la cabecera falla
+				}
+			}
+		}
+		// <-- FIN BLOQUE MODIFICADO -->
+
 		targets := make(map[string]*Target)
 		for _, ip := range cfg.IPs {
 			targets[ip.String()] = &Target{
@@ -94,7 +117,8 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 
 		var wgListener sync.WaitGroup
 		wgListener.Add(1)
-		go listener(ctx, &wgListener, handle, cfg, targets, results)
+		// Pasar el pcapWriter al listener
+		go listener(ctx, &wgListener, handle, cfg, targets, results, pcapWriter)
 
 		var wgSenders sync.WaitGroup
 		ifaceIPNet, err := GetSrcIPNet(cfg.Interface)
@@ -175,7 +199,6 @@ func countRemainingTargets(targets map[string]*Target) int {
 func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, jobs <-chan net.IP, ifaceIPNet *net.IPNet) {
 	defer wg.Done()
 
-	// <-- INICIO BLOQUE CORREGIDO: CÁLCULO DEFENSIVO -->
 	ifaceIPv4 := ifaceIPNet.IP.To4()
 	if ifaceIPv4 == nil {
 		log.Printf("Error crítico en sender: la IP de la interfaz no es una IPv4 válida.")
@@ -185,12 +208,9 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 	hostPart := make(net.IP, net.IPv4len)
 	copy(hostPart, ifaceIPv4)
 
-	// La máscara de un IPNet de una interfaz real siempre tendrá la longitud correcta (4 o 16).
-	// Forzamos el cálculo a 4 bytes para estar seguros.
 	for i := 0; i < net.IPv4len; i++ {
 		hostPart[i] &^= ifaceIPNet.Mask[i]
 	}
-	// <-- FIN BLOQUE CORREGIDO -->
 
 	for {
 		select {
@@ -201,7 +221,6 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 				return
 			}
 
-			// <-- INICIO BLOQUE CORREGIDO: USO DEFENSIVO -->
 			dstIPv4 := dstIP.To4()
 			if dstIPv4 == nil {
 				if cfg.Verbosity > 0 {
@@ -212,7 +231,7 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 
 			var sourceIP net.IP
 			if cfg.ArpSPA != nil {
-				sourceIP = cfg.ArpSPA.To4() // Forzamos a 4 bytes también aquí
+				sourceIP = cfg.ArpSPA.To4()
 			} else {
 				dstMask := dstIPv4.DefaultMask()
 				if dstMask == nil {
@@ -230,7 +249,6 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 				log.Printf("Error: no se pudo determinar la IP de origen para el destino %s", dstIPv4)
 				continue
 			}
-			// <-- FIN BLOQUE CORREGIDO -->
 
 			if cfg.Verbosity >= 2 {
 				log.Printf("Enviando ARP a %s desde %s", dstIPv4, sourceIP)
@@ -241,7 +259,6 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 }
 
 func allTargetsDone(targets map[string]*Target, maxRetries int) bool {
-	// ... (sin cambios)
 	for _, t := range targets {
 		t.mu.Lock()
 		status := t.Status
@@ -256,7 +273,6 @@ func allTargetsDone(targets map[string]*Target, maxRetries int) bool {
 }
 
 func findNextTarget(targets map[string]*Target, now time.Time, maxRetries int) *Target {
-	// ... (sin cambios)
 	for _, t := range targets {
 		t.mu.Lock()
 		status := t.Status
@@ -281,8 +297,8 @@ func findNextTarget(targets map[string]*Target, now time.Time, maxRetries int) *
 	return nil
 }
 
-func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[string]*Target, results chan<- ScanResult) {
-	// ... (sin cambios)
+// <-- INICIO BLOQUE MODIFICADO: ACTUALIZAR FIRMA DEL LISTENER Y AÑADIR LÓGICA DE ESCRITURA -->
+func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[string]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer) {
 	defer wg.Done()
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for {
@@ -293,6 +309,21 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 			if !ok {
 				return
 			}
+
+			// Escribir el paquete ANTES de cualquier filtrado, si el writer existe.
+			// Solo escribimos si es una respuesta ARP para mantener el fichero limpio.
+			arpLayerCheck := packet.Layer(layers.LayerTypeARP)
+			if arpLayerCheck != nil {
+				if arp, ok := arpLayerCheck.(*layers.ARP); ok && arp.Operation == layers.ARPReply {
+					if pcapWriter != nil {
+						if err := pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data()); err != nil {
+							log.Printf("Advertencia: no se pudo escribir el paquete en el archivo pcap: %v", err)
+						}
+					}
+				}
+			}
+
+			// La lógica de procesamiento continúa como antes
 			arpLayer := packet.Layer(layers.LayerTypeARP)
 			if arpLayer == nil {
 				continue
@@ -344,8 +375,9 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 	}
 }
 
+// <-- FIN BLOQUE MODIFICADO -->
+
 func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP) {
-	// ... (sin cambios)
 	eth := layers.Ethernet{
 		SrcMAC:       iface.HardwareAddr,
 		DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
@@ -375,7 +407,6 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP) {
 }
 
 func GetSrcIPNet(iface *net.Interface) (*net.IPNet, error) {
-	// ... (sin cambios)
 	addrs, err := iface.Addrs()
 	if err != nil {
 		return nil, err

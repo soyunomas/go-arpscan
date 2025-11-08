@@ -2,9 +2,13 @@
 package formatter
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"go-arpscan/internal/scanner"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/fatih/color"
@@ -19,7 +23,6 @@ const (
 	colPadding     = "    "
 )
 
-// <-- INICIO BLOQUE MODIFICADO: PALETA DE COLORES REVISADA Y MÁS BRILLANTE -->
 var (
 	// Colores de Datos
 	ipColor     = color.New(color.FgHiGreen).SprintFunc()
@@ -35,7 +38,6 @@ var (
 	// Color de Cabecera
 	headerColor = color.New(color.FgHiWhite, color.Bold).SprintFunc() // Blanco brillante y negrita
 )
-// <-- FIN BLOQUE MODIFICADO -->
 
 type Formatter interface {
 	PrintHeader()
@@ -160,6 +162,112 @@ func (f *PlainFormatter) PrintHeader() {}
 func (f *PlainFormatter) PrintResult(result scanner.ScanResult) {
 	f.DefaultFormatter.printRow(result.IP, result.MAC, result.RTT.String(), result.Status, result.Vendor, false)
 }
+
+// <-- INICIO BLOQUE MODIFICADO: EL FOOTER AHORA NO HACE NADA -->
 func (f *PlainFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {
-	f.DefaultFormatter.PrintFooter(conflictSummaries, multiIPSummaries)
+	// En modo 'plain', no queremos ningún pie de página, ni siquiera los resúmenes.
+}
+// <-- FIN BLOQUE MODIFICADO -->
+
+// --- CSV Formatter ---
+type CSVFormatter struct {
+	writer *csv.Writer
+}
+
+func NewCSVFormatter() *CSVFormatter {
+	return &CSVFormatter{
+		writer: csv.NewWriter(os.Stdout),
+	}
+}
+
+func (f *CSVFormatter) PrintHeader() {
+	headers := []string{"ip", "mac", "rtt_ms", "vendor", "status"}
+	if err := f.writer.Write(headers); err != nil {
+		log.Printf("Error escribiendo la cabecera CSV: %v", err)
+	}
+}
+
+func (f *CSVFormatter) PrintResult(result scanner.ScanResult) {
+	record := []string{
+		result.IP,
+		result.MAC,
+		strconv.FormatInt(result.RTT.Milliseconds(), 10),
+		result.Vendor,
+		result.Status,
+	}
+	if err := f.writer.Write(record); err != nil {
+		log.Printf("Error escribiendo el registro CSV para %s: %v", result.IP, err)
+	}
+}
+
+func (f *CSVFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {
+	f.writer.Flush()
+	if err := f.writer.Error(); err != nil {
+		log.Printf("Error finalizando la escritura CSV: %v", err)
+	}
+}
+
+// --- JSON Formatter ---
+// jsonResult define la estructura de cada resultado individual en la salida JSON.
+// Usamos tags para controlar los nombres de los campos y 'omitempty' para ocultar campos vacíos.
+type jsonResult struct {
+	IP     string `json:"ip"`
+	MAC    string `json:"mac"`
+	RTTms  int64  `json:"rtt_ms"`
+	Vendor string `json:"vendor"`
+	Status string `json:"status,omitempty"`
+}
+
+// jsonOutput define la estructura del objeto JSON raíz.
+type jsonOutput struct {
+	Results []jsonResult `json:"results"`
+	Summary struct {
+		Conflicts []string `json:"conflicts,omitempty"`
+		MultiIP   []string `json:"multi_ip,omitempty"`
+	} `json:"summary"`
+}
+
+type JSONFormatter struct {
+	results []scanner.ScanResult
+}
+
+func NewJSONFormatter() *JSONFormatter {
+	return &JSONFormatter{
+		results: make([]scanner.ScanResult, 0),
+	}
+}
+
+func (f *JSONFormatter) PrintHeader() {
+	// No hacemos nada aquí; la salida JSON se genera toda junta en el footer.
+}
+
+func (f *JSONFormatter) PrintResult(result scanner.ScanResult) {
+	// Acumulamos los resultados en memoria.
+	f.results = append(f.results, result)
+}
+
+func (f *JSONFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {
+	output := jsonOutput{}
+	output.Summary.Conflicts = conflictSummaries
+	output.Summary.MultiIP = multiIPSummaries
+	output.Results = make([]jsonResult, len(f.results))
+
+	// Transformamos los resultados del scanner a nuestro formato JSON deseado.
+	for i, r := range f.results {
+		output.Results[i] = jsonResult{
+			IP:     r.IP,
+			MAC:    r.MAC,
+			RTTms:  r.RTT.Milliseconds(),
+			Vendor: r.Vendor,
+			Status: r.Status,
+		}
+	}
+
+	// Serializamos la estructura completa a JSON con indentación.
+	jsonData, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		log.Fatalf("Error fatal al generar la salida JSON: %v", err)
+	}
+
+	fmt.Println(string(jsonData))
 }
