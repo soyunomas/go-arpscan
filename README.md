@@ -120,9 +120,42 @@ IP Address         MAC Address          Status          Vendor
 
 A continuación se detalla el estado actual y las funcionalidades futuras planificadas para `go-arpscan`.
 
-### ✅ Fase 1 y 2: Fundación y Usabilidad Esencial (COMPLETADO)
+### ✅ Fases 1, 2 y 4: Fundación, Usabilidad e Integración (COMPLETADO)
 
-Esta fase se centró en replicar las funcionalidades más comunes de `arp-scan` y añadir mejoras significativas de usabilidad como la auto-detección de interfaz, descarga de ficheros de vendors, diagnósticos de red y control total sobre el escaneo y la salida.
+*Objetivo: Construir una base sólida y añadir las características de usabilidad e integración que hacen a la herramienta moderna y fácil de usar en flujos de trabajo reales.*
+
+**Paso 1: Fundamentos de la CLI y Gestión de Objetivos**
+*   [✅] **Ayuda y Versión**: `--help (-h)` y `--version (-V)`.
+*   [✅] **Niveles de Verbosidad**: `--verbose (-v)`.
+*   [✅] **Especificación de Objetivos**: Soporte para IPs, rangos (`1.2.3.4-5.6.7.8`) y notación CIDR (`1.2.3.0/24`).
+*   [✅] **Objetivos desde Fichero**: `--file (-f)`.
+*   [✅] **Escaneo de Red Local**: `--localnet`.
+*   [✅] **Resolución de Nombres (DNS)**: Habilitada por defecto, desactivable con `--numeric (-N)`.
+
+**Paso 2: Control del Escaneo y Paquetes**
+*   [✅] **Auto-detección de Interfaz**: Selección automática de la mejor interfaz de red.
+*   [✅] **Selección Manual de Interfaz**: `--interface (-i)`.
+*   [✅] **Control de Reintentos**: `--retry (-r)`.
+*   [✅] **Control de Timeouts**: `--host-timeout (-t)` y `--scan-timeout` (con auto-cálculo).
+*   [✅] **Control de Ancho de Banda**: `--interval` y `--bandwidth (-B)`.
+*   [✅] **Backoff Exponencial**: `--backoff (-b)`.
+*   [✅] **Aleatorización de Objetivos**: `--random (-R)` y `--randomseed`.
+*   [✅] **IP de Origen Personalizada**: `--arpspa`.
+
+**Paso 3: Formato de Salida y Diagnósticos**
+*   [✅] **Gestión de Vendors**: Descarga y uso automático de ficheros OUI/IAB.
+*   [✅] **Ficheros de Vendor Personalizados**: `--ouifile (-O)`, `--iabfile` y `--macfile`.
+*   [✅] **Salida Coloreada y Legible**: Formato por defecto con control vía `--color`.
+*   [✅] **Mostrar Tiempo de Respuesta (RTT)**: `--rtt (-D)`.
+*   [✅] **Detección de Conflictos de IP**: Muestra `(CONFLICT)`.
+*   [✅] **Detección de Dispositivos Multi-IP**: Muestra `(Multi-IP)`.
+*   [✅] **Ignorar Duplicados**: `--ignoredups (-g)`.
+*   [✅] **Modos de Salida para Scripting**: `--quiet (-q)` para IP/MAC y `--plain (-x)` para salida sin cabeceras/pies.
+
+**Paso 4: Integración con Ecosistema Moderno**
+*   [✅] **Salida Estructurada JSON**: `--json`.
+*   [✅] **Salida Estructurada CSV**: `--csv`.
+*   [✅] **Guardado de Captura PCAP**: `--pcapsavefile (-W)`.
 
 ### [🔲] Fase 3: Manipulación Avanzada de Paquetes (Paridad de "Power-User")
 
@@ -139,18 +172,6 @@ Esta fase se centró en replicar las funcionalidades más comunes de `arp-scan` 
 
 **Paso 3.3: Framing y Datos Adicionales (Baja Aportación)**
 *   [🔲] `--padding=<h>`, `-A <h>` y [🔲] `--llc`, `-L`: Funcionalidades de nicho para replicar por completo a arp-scan.
-
-### ✅ Fase 4: Integración con el Ecosistema Moderno (COMPLETADO)
-
-*Objetivo: Hacer que go-arpscan no solo sea una herramienta, sino una pieza integrable en flujos de trabajo automatizados.*
-
-**Paso 4.1: Salida Estructurada (Aportación CRÍTICA)**
-*   [✅] `--json`: La funcionalidad "killer" que nos pone por delante. Permite una integración trivial con cualquier script (Python, Bash con jq, etc.).
-*   [✅] `--csv`: Salida CSV para análisis de datos e importación directa en hojas de cálculo.
-
-**Paso 4.2: Interoperabilidad con Herramientas de Red (Alta Aportación)**
-*   [✅] `--pcapsavefile=<s>`, `-W <s>`: Guardar respuestas en formato pcap para análisis en Wireshark. Invaluable para la depuración y el análisis forense.
-*   [🔲] `--snap=<i>`, `-n <i>`: Controlar el snaplen de pcap.
 
 ### [🔲] Fase 5: Funcionalidades Visionarias
 
