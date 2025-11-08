@@ -1,4 +1,3 @@
-```markdown
 # go-arpscan
 
 Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado en el clásico `arp-scan` pero con mejoras de usabilidad y diagnóstico.
@@ -172,4 +171,3 @@ Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la 
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el fichero `LICENSE` para más detalles.
-```
