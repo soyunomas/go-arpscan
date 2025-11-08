@@ -60,6 +60,10 @@ var (
 	ignoreDups    bool
 	colorMode     string
 	pcapSaveFile  string
+	// <-- INICIO BLOQUE MODIFICADO: NUEVOS FLAGS -->
+	vlanID  int
+	snaplen int
+	// <-- FIN BLOQUE MODIFICADO -->
 )
 
 var rootCmd = &cobra.Command{
@@ -143,6 +147,12 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			interval = time.Duration(float64(effectivePacketBits) / float64(bitsPerSecond) * float64(time.Second))
 			log.Printf("Ancho de banda establecido en %s. Intervalo entre paquetes calculado: %v", bandwidth, interval)
 		}
+
+		// <-- INICIO BLOQUE MODIFICADO: VALIDACIÓN DE VLAN ID -->
+		if vlanID != 0 && (vlanID < 1 || vlanID > 4094) {
+			log.Fatalf("Error: el ID de VLAN debe estar entre 1 y 4094.")
+		}
+		// <-- FIN BLOQUE MODIFICADO -->
 
 		var iface *net.Interface
 		var localnetCIDR *net.IPNet
@@ -272,6 +282,7 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			log.Fatalf("Error cargando la base de datos de vendedores: %v", err)
 		}
 
+		// <-- INICIO BLOQUE MODIFICADO: PASAR NUEVOS VALORES A LA CONFIGURACIÓN -->
 		config := &scanner.Config{
 			Interface:     iface,
 			IPs:           ips,
@@ -284,7 +295,10 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			ArpSPA:        finalArpSPA,
 			Verbosity:     verboseCount,
 			PcapSaveFile:  pcapSaveFile,
+			VlanID:        uint16(vlanID),
+			Snaplen:       snaplen,
 		}
+		// <-- FIN BLOQUE MODIFICADO -->
 
 		var f formatter.Formatter
 		if jsonOutput {
@@ -299,11 +313,12 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			f = formatter.NewDefaultFormatter(showRTT)
 		}
 
-		// <-- INICIO BLOQUE MODIFICADO: LÓGICA DE LOGS CORREGIDA -->
-		// Solo mostrar logs si la salida NO es para scripts (json, csv, plain, quiet)
 		isScriptingOutput := jsonOutput || csvOutput || plain || quiet
 		if !isScriptingOutput {
 			log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
+			if config.VlanID > 0 {
+				log.Printf("Usando VLAN tag: %d", config.VlanID)
+			}
 			log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
 			if arpSPA != "" {
 				log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
@@ -314,7 +329,6 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 				log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
 			}
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
 
 		resultsChan, err := scanner.StartScan(config)
 		if err != nil {
@@ -330,7 +344,6 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 		for result := range resultsChan {
 			if previousMAC, found := seenIPs[result.IP]; found {
 				if ignoreDups {
-					// En modo no-script, loguear si la verbosidad es alta
 					if !isScriptingOutput && verboseCount >= 1 {
 						log.Printf("Respuesta duplicada/conflicto para %s (%s) ignorada.", result.IP, result.MAC)
 					}
@@ -375,11 +388,9 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 
 		f.PrintFooter(conflictSummaries, multiIPSummaries)
 
-		// <-- INICIO BLOQUE MODIFICADO: LÓGICA DE LOGS CORREGIDA -->
 		if !isScriptingOutput {
 			log.Println("Escaneo completado.")
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
 	},
 }
 
@@ -420,6 +431,11 @@ func init() {
 
 	rootCmd.Flags().BoolVarP(&random, "random", "R", false, "Aleatoriza el orden de los hosts en la lista de objetivos.\nEsto hace que los paquetes ARP se envíen en un orden aleatorio.")
 	rootCmd.Flags().Int64Var(&randomSeed, "randomseed", 0, "Usa <i> como semilla para el generador de números pseudoaleatorios.\nÚtil para obtener un orden aleatorio reproducible. Solo efectivo con --random.")
+
+	// <-- INICIO BLOQUE MODIFICADO: AÑADIR NUEVOS FLAGS -->
+	rootCmd.Flags().IntVarP(&vlanID, "vlan", "Q", 0, "Especifica el ID de VLAN 802.1Q <i> (1-4094).")
+	rootCmd.Flags().IntVarP(&snaplen, "snap", "n", 65536, "Establece la longitud de captura pcap a <i> bytes.")
+	// <-- FIN BLOQUE MODIFICADO -->
 
 	rootCmd.Flags().CountVarP(&verboseCount, "verbose", "v", "Muestra mensajes de progreso detallados.\nÚsalo más de una vez para mayor efecto (-v, -vv, -vvv):\n1: Muestra finalización de pasadas y hosts desconocidos.\n2: Muestra cada paquete enviado/recibido y el filtro pcap.\n3. Muestra la lista de hosts antes de iniciar el escaneo.")
 	rootCmd.Flags().BoolVarP(&versionFlag, "version", "V", false, "Muestra la versión del programa y sale.")

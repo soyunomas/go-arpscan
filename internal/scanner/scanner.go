@@ -26,6 +26,7 @@ type ScanResult struct {
 	Status string
 }
 
+// <-- INICIO BLOQUE MODIFICADO: AÑADIR CAMPOS A CONFIG -->
 type Config struct {
 	Interface     *net.Interface
 	IPs           []net.IP
@@ -37,8 +38,12 @@ type Config struct {
 	BackoffFactor float64
 	ArpSPA        net.IP
 	Verbosity     int
-	PcapSaveFile  string // <-- Nuevo Campo
+	PcapSaveFile  string
+	VlanID        uint16 // Añadido para VLAN tagging
+	Snaplen       int    // Añadido para controlar el snaplen
 }
+
+// <-- FIN BLOQUE MODIFICADO -->
 
 type targetStatus int
 
@@ -62,12 +67,17 @@ const (
 )
 
 func StartScan(cfg *Config) (<-chan ScanResult, error) {
-	handle, err := pcap.OpenLive(cfg.Interface.Name, 65536, true, pcap.BlockForever)
+	// <-- INICIO BLOQUE MODIFICADO: USAR CFG.SNAPLEN -->
+	handle, err := pcap.OpenLive(cfg.Interface.Name, int32(cfg.Snaplen), true, pcap.BlockForever)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo abrir el handle de pcap: %w", err)
 	}
+	// <-- FIN BLOQUE MODIFICADO -->
 
 	bpfFilter := "arp"
+	if cfg.VlanID > 0 {
+		bpfFilter = fmt.Sprintf("vlan %d and arp", cfg.VlanID)
+	}
 	if cfg.Verbosity >= 2 {
 		log.Printf("Estableciendo filtro pcap BPF: '%s'", bpfFilter)
 	}
@@ -83,25 +93,22 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		defer close(results)
 		defer handle.Close()
 
-		// <-- INICIO BLOQUE MODIFICADO: LÓGICA PARA PCAP WRITER -->
 		var pcapWriter *pcapgo.Writer
 		if cfg.PcapSaveFile != "" {
 			f, err := os.Create(cfg.PcapSaveFile)
 			if err != nil {
-				// No podemos devolver el error directamente, pero podemos loguearlo y continuar
 				log.Printf("CRÍTICO: No se pudo crear el archivo pcap '%s': %v. El escaneo continuará sin guardar.", cfg.PcapSaveFile, err)
 			} else {
-				// Defer close para asegurar que el fichero se cierra al final de la goroutine
 				defer f.Close()
 				pcapWriter = pcapgo.NewWriter(f)
-				// Escribir la cabecera del fichero pcap es crucial
-				if err := pcapWriter.WriteFileHeader(65536, handle.LinkType()); err != nil {
+				// <-- INICIO BLOQUE MODIFICADO: USAR CFG.SNAPLEN EN PCAP HEADER -->
+				if err := pcapWriter.WriteFileHeader(uint32(cfg.Snaplen), handle.LinkType()); err != nil {
 					log.Printf("CRÍTICO: No se pudo escribir la cabecera del archivo pcap: %v.", err)
-					pcapWriter = nil // Desactivar la escritura si la cabecera falla
+					pcapWriter = nil
 				}
+				// <-- FIN BLOQUE MODIFICADO -->
 			}
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
 
 		targets := make(map[string]*Target)
 		for _, ip := range cfg.IPs {
@@ -117,7 +124,6 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 
 		var wgListener sync.WaitGroup
 		wgListener.Add(1)
-		// Pasar el pcapWriter al listener
 		go listener(ctx, &wgListener, handle, cfg, targets, results, pcapWriter)
 
 		var wgSenders sync.WaitGroup
@@ -253,7 +259,7 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 			if cfg.Verbosity >= 2 {
 				log.Printf("Enviando ARP a %s desde %s", dstIPv4, sourceIP)
 			}
-			sendARP(handle, cfg.Interface, sourceIP, dstIPv4)
+			sendARP(handle, cfg.Interface, sourceIP, dstIPv4, cfg.VlanID)
 		}
 	}
 }
@@ -297,7 +303,6 @@ func findNextTarget(targets map[string]*Target, now time.Time, maxRetries int) *
 	return nil
 }
 
-// <-- INICIO BLOQUE MODIFICADO: ACTUALIZAR FIRMA DEL LISTENER Y AÑADIR LÓGICA DE ESCRITURA -->
 func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[string]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer) {
 	defer wg.Done()
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
@@ -310,8 +315,6 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 				return
 			}
 
-			// Escribir el paquete ANTES de cualquier filtrado, si el writer existe.
-			// Solo escribimos si es una respuesta ARP para mantener el fichero limpio.
 			arpLayerCheck := packet.Layer(layers.LayerTypeARP)
 			if arpLayerCheck != nil {
 				if arp, ok := arpLayerCheck.(*layers.ARP); ok && arp.Operation == layers.ARPReply {
@@ -323,7 +326,6 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 				}
 			}
 
-			// La lógica de procesamiento continúa como antes
 			arpLayer := packet.Layer(layers.LayerTypeARP)
 			if arpLayer == nil {
 				continue
@@ -375,14 +377,16 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 	}
 }
 
-// <-- FIN BLOQUE MODIFICADO -->
-
-func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP) {
+// <-- INICIO BLOQUE MODIFICADO: FUNCIÓN SENDARP AHORA ACEPTA VLANID Y CONSTRUYE PAQUETES CON TAG -->
+func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vlanID uint16) {
+	// 1. Capa Ethernet (siempre presente)
 	eth := layers.Ethernet{
-		SrcMAC:       iface.HardwareAddr,
-		DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
-		EthernetType: layers.EthernetTypeARP,
+		SrcMAC: iface.HardwareAddr,
+		DstMAC: net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+		// El EtherType se decidirá en función de si hay VLAN o no.
 	}
+
+	// 2. Capa ARP (siempre presente)
 	arp := layers.ARP{
 		AddrType:          layers.LinkTypeEthernet,
 		Protocol:          layers.EthernetTypeIPv4,
@@ -394,17 +398,35 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP) {
 		DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
 		DstProtAddress:    []byte(dstIP.To4()),
 	}
+
 	buf := gopacket.NewSerializeBuffer()
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	err := gopacket.SerializeLayers(buf, opts, &eth, &arp)
+	var err error
+
+	// 3. Serializar las capas. Si hay VLAN, se inserta una capa Dot1Q.
+	if vlanID > 0 {
+		eth.EthernetType = layers.EthernetTypeDot1Q
+		dot1q := layers.Dot1Q{
+			VLANIdentifier: vlanID,
+			Type:           layers.EthernetTypeARP,
+		}
+		err = gopacket.SerializeLayers(buf, opts, &eth, &dot1q, &arp)
+	} else {
+		eth.EthernetType = layers.EthernetTypeARP
+		err = gopacket.SerializeLayers(buf, opts, &eth, &arp)
+	}
+
 	if err != nil {
 		log.Printf("Error serializando paquete para %s: %v", dstIP, err)
 		return
 	}
+
 	if err := handle.WritePacketData(buf.Bytes()); err != nil {
 		log.Printf("Error enviando paquete para %s: %v", dstIP, err)
 	}
 }
+
+// <-- FIN BLOQUE MODIFICADO -->
 
 func GetSrcIPNet(iface *net.Interface) (*net.IPNet, error) {
 	addrs, err := iface.Addrs()
