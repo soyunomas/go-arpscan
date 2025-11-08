@@ -115,12 +115,62 @@ IP Address         MAC Address          Status          Vendor
 | `-V` | `--version` | `bool` | Muestra la versión del programa y sale. | `false` |
 | `-h` | `--help` | `bool` | Muestra el mensaje de ayuda y sale. | `false` |
 
+---
+
+## Comparación con arp-scan
+
+`go-arpscan` está fuertemente inspirado en la funcionalidad del clásico `arp-scan`, pero busca modernizar la experiencia del usuario y añadir características para la integración en flujos de trabajo actuales. La siguiente tabla muestra la correspondencia de los parámetros entre ambas herramientas.
+
+| Funcionalidad | `arp-scan` (original) | `go-arpscan` (nuestro) | Estado / Comentarios |
+| :--- | :--- | :--- | :--- |
+| **Gestión de Objetivos** | | | |
+| Escanear Red Local | `--localnet`, `-l` | `--localnet` | ✅ **Implementado**. En `go-arpscan` se puede combinar con otros objetivos. |
+| Leer Objetivos de Fichero | `--file=<s>`, `-f <s>` | `--file=<s>`, `-f <s>` | ✅ **Implementado**. |
+| No usar DNS | `--numeric`, `-N` | `--numeric`, `-N` | ✅ **Implementado**. |
+| **Control del Escaneo** | | | |
+| Especificar Interfaz | `--interface=<s>`, `-I <s>` | `--interface=<s>`, `-i <s>` | ✨ **Mejorado**. ¡Ojo! El flag corto es diferente. `go-arpscan` auto-detecta la mejor interfaz si no se especifica. |
+| Timeouts por Host | `--timeout=<i>`, `-t <i>` | `--host-timeout=<d>`, `-t <d>` | ✅ **Implementado**. `go-arpscan` acepta unidades de tiempo (e.g., `750ms`). |
+| Nº de Reintentos | `--retry=<i>`, `-r <i>` | `--retry=<i>`, `-r <i>` | ✅ **Implementado**. |
+| Intervalo entre Paquetes | `--interval=<x>`, `-i <x>` | `--interval=<d>` | ✅ **Implementado**. ¡Ojo! En `arp-scan`, `-i` es alias de `--interval`. En `go-arpscan`, `-i` es alias de `--interface`. |
+| Limitar Ancho de Banda | `--bandwidth=<x>`, `-B <x>` | `--bandwidth=<x>`, `-B <x>` | ✅ **Implementado**. |
+| Factor de Backoff | `--backoff=<f>`, `-b <f>` | `--backoff=<f>`, `-b <f>` | ✅ **Implementado**. |
+| Aleatorizar Objetivos | `--random`, `-R` | `--random`, `-R` | ✅ **Implementado**. |
+| Semilla Aleatoria | `--randomseed=<i>` | `--randomseed=<i>` | ✅ **Implementado**. |
+| **Formato de Salida** | | | |
+| Salida Mínima | `--quiet`, `-q` | `--quiet`, `-q` | ✅ **Implementado**. |
+| Salida Simple para Scripts | `--plain`, `-x` | `--plain`, `-x` | ✅ **Implementado**. |
+| Ignorar Duplicados | `--ignoredups`, `-g` | `--ignoredups`, `-g` | ✅ **Implementado**. |
+| Mostrar RTT | `--rtt`, `-D` | `--rtt`, `-D` | ✅ **Implementado**. |
+| Guardar Captura pcap | `--pcapsavefile=<s>`, `-W <s>` | `--pcapsavefile=<s>`, `-W <s>` | ✅ **Implementado**. Guarda solo las respuestas (ARP Reply). |
+| Salida JSON | *(No disponible)* | `--json` | 💡 **Nuevo**. Característica clave para la integración moderna. |
+| Salida CSV | *(No disponible)* | `--csv` | 💡 **Nuevo**. Facilita el análisis de datos en hojas de cálculo. |
+| Salida Coloreada | *(No disponible)* | `--color=<auto\|on\|off>` | 💡 **Nuevo**. Mejora la legibilidad de la salida por defecto. |
+| **Manipulación de Paquetes** | | | |
+| Fichero OUI | `--ouifile=<s>`, `-O <s>` | `--ouifile=<s>`, `-O <s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente si no existe. |
+| Fichero IAB | `--iabfile=<s>` | `--iabfile=<s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente. |
+| Fichero MAC Personalizado | `--macfile=<s>` | `--macfile=<s>` | ✅ **Implementado**. |
+| IP de Origen ARP (SPA) | `--arpspa=<a>`, `-s <a>` | `--arpspa=<a>` | ✅ **Implementado**. |
+| Longitud de Captura (snap) | `--snap=<i>`, `-n <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| MAC Origen Ethernet | `--srcaddr=<m>`, `-S <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| MAC Destino Ethernet | `--destaddr=<m>`, `-T <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| MAC Origen ARP (SHA) | `--arpsha=<m>`, `-u <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| MAC Destino ARP (THA) | `--arptha=<m>`, `-w <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Tipo de Protocolo Ethernet | `--prototype=<i>`, `-y <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Tipo Hardware ARP | `--arphrd=<i>`, `-H <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Tipo Protocolo ARP | `--arppro=<i>`, `-p <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Longitud HW/Proto ARP | `--arphln`, `--arppln` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Operación ARP (Opcode) | `--arpop=<i>`, `-o <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Relleno (Padding) | `--padding=<h>`, `-A <h>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Framing LLC | `--llc`, `-L` | *(Aún no disponible)* | 🔲 No Implementado. |
+| VLAN Tagging | `--vlan=<i>`, `-Q <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
+
+
 
 ## Hoja de Ruta
 
 A continuación se detalla el estado actual y las funcionalidades futuras planificadas para `go-arpscan`.
 
-### ✅ Fases 1, 2 y 4: Fundación, Usabilidad e Integración (COMPLETADO)
+### ✅ Fases 1 y 2: Fundación, Usabilidad y Diagnósticos (COMPLETADO)
 
 *Objetivo: Construir una base sólida y añadir las características de usabilidad e integración que hacen a la herramienta moderna y fácil de usar en flujos de trabajo reales.*
 
@@ -152,34 +202,47 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Ignorar Duplicados**: `--ignoredups (-g)`.
 *   [✅] **Modos de Salida para Scripting**: `--quiet (-q)` para IP/MAC y `--plain (-x)` para salida sin cabeceras/pies.
 
-**Paso 4: Integración con Ecosistema Moderno**
-*   [✅] **Salida Estructurada JSON**: `--json`.
-*   [✅] **Salida Estructurada CSV**: `--csv`.
-*   [✅] **Guardado de Captura PCAP**: `--pcapsavefile (-W)`.
-
 ### [🔲] Fase 3: Manipulación Avanzada de Paquetes (Paridad de "Power-User")
 
 *Objetivo: Implementar el arsenal completo de manipulación de paquetes de arp-scan para atraer a los usuarios avanzados, pentesters y administradores de red.*
 
-**Paso 3.1: Control Total de la Trama Ethernet (Alta Aportación para expertos)**
+**Paso 3.1: Opciones de Red Esenciales (Alto Impacto)**
 *   [🔲] `--vlan=<i>`, `-Q <i>`: Esencial para escanear redes corporativas segmentadas.
-*   [🔲] `--srcaddr=<m>`, `-S <m>` y [🔲] `--destaddr=<m>`, `-T <m>`: Permite técnicas de spoofing y escaneo dirigido.
-*   [🔲] `--prototype=<i>`, `-y <i>`: Control del EtherType.
+*   [🔲] `--snap=<i>`, `-n <i>`: Controlar el `snaplen`. Complemento crucial para `--pcapsavefile`, ya que determina la longitud de captura del paquete.
 
-**Paso 3.2: Control Total del Paquete ARP (Media Aportación para expertos)**
-*   [🔲] `--arpsha=<m>`, `-u <m>` y [🔲] `--arpop=<i>`, `-o <i>`: Los dos flags de manipulación ARP más útiles para fingerprinting.
-*   [🔲] `--arptha`, `--arphrd`, `--arppro`, `--arphln`, `--arppln`: El resto de los flags para una compatibilidad del 100%.
+**Paso 3.2: Spoofing y Manipulación ARP (Impacto Medio)**
+*   [🔲] `--srcaddr=<m>`, `-S <m>`: Modificar la MAC de origen de la trama Ethernet.
+*   [🔲] `--arpsha=<m>`, `-u <m>`: Modificar la MAC de origen dentro del paquete ARP.
+*   [🔲] `--arpop=<i>`, `-o <i>`: Cambiar el código de operación ARP (Request/Reply).
+*   [🔲] `--arpspa=dest`: Añadir el soporte para el valor especial `"dest"` en la IP de origen.
 
-**Paso 3.3: Framing y Datos Adicionales (Baja Aportación)**
-*   [🔲] `--padding=<h>`, `-A <h>` y [🔲] `--llc`, `-L`: Funcionalidades de nicho para replicar por completo a arp-scan.
+**Paso 3.3: Paridad Completa y Opciones de Nicho (Bajo Impacto)**
+*   [🔲] **Manipulación de Trama Ethernet**: `--destaddr=<m>`, `--prototype=<i>`.
+*   [🔲] **Manipulación de Campos ARP**: `--arptha`, `--arphrd`, `--arppro`, `--arphln`, `--arppln`.
+*   [🔲] **Framing y Datos Adicionales**: `--padding=<h>`, `--llc`.
+
+**Paso 3.4: Paridad de Aliases (Calidad de Vida)**
+*   [🔲] Añadir el alias `-s` para `--arpspa`.
+
+### ✅ Fase 4: Integración con el Ecosistema Moderno (COMPLETADO)
+
+*Objetivo: Hacer que go-arpscan no solo sea una herramienta, sino una pieza integrable en flujos de trabajo automatizados.*
+
+**Paso 4.1: Salida Estructurada e Interoperabilidad**
+*   [✅] **Salida Estructurada JSON**: `--json`.
+*   [✅] **Salida Estructurada CSV**: `--csv`.
+*   [✅] **Guardado de Captura PCAP**: `--pcapsavefile (-W)`.
 
 ### [🔲] Fase 5: Funcionalidades Visionarias
 
-*   **Modos Avanzados**:
-    *   `--monitor`: Modo de escucha continua para detectar nuevos dispositivos, cambios de MAC y conflictos en tiempo real.
-    *   `--config`: Soporte para un fichero de configuración (e.g., `~/.go-arpscan.yaml`).
-*   **Inteligencia de Red**: Detección heurística de múltiples gateways o posibles ataques de ARP spoofing en modo monitor.
+*Objetivo: Introducir características innovadoras que no existen en el `arp-scan` original, posicionando a `go-arpscan` como una herramienta de monitorización de red de nueva generación.*
 
+**Paso 5.1: Modos Avanzados**
+*   `--monitor`: Modo de escucha continua para detectar nuevos dispositivos, cambios de MAC y conflictos en tiempo real.
+*   `--config`: Soporte para un fichero de configuración (e.g., `~/.go-arpscan.yaml`).
+
+**Paso 5.2: Inteligencia de Red**
+*   Detección heurística de múltiples gateways o posibles ataques de ARP spoofing en modo monitor.
 ## Agradecimientos
 
 Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la herramienta original [arp-scan](http://www.royhills.co.uk/projects/arp-scan/) de Roy Hills.
