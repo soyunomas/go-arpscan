@@ -1,3 +1,4 @@
+```markdown
 # go-arpscan
 
 Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado en el clásico `arp-scan` pero con mejoras de usabilidad y diagnóstico.
@@ -16,11 +17,13 @@ El objetivo de este proyecto es ofrecer una alternativa moderna a `arp-scan` que
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
 *   ✨ **Auto-Detección Inteligente**: Detecta automáticamente la interfaz de red a utilizar si no se especifica una.
 *   🎨 **Salida Coloreada y Alineada**: Formato de salida moderno y legible, con control total sobre los colores (`--color=auto|on|off`).
+*   📜 **Salida Estructurada**: Soporte nativo para `--json` y `--csv`, facilitando la integración con scripts y herramientas de análisis.
 *   🌐 **Gestión Automática de Vendors**: Descarga automáticamente los ficheros OUI e IAB de la IEEE si no se encuentran localmente.
 *   🔍 **Diagnóstico de Red Avanzado**:
     *   Detecta y reporta **Conflictos de IP** (una misma IP usada por varias MACs).
     *   Detecta y reporta dispositivos **Multi-IP** (una misma MAC respondiendo para varias IPs).
     *   Diferencia claramente las respuestas **Duplicadas**.
+*   **Análisis Forense**: Guarda las respuestas de red en ficheros `pcap` para su análisis detallado en herramientas como Wireshark.
 *   🎯 **Flexibilidad en los Objetivos**: Soporta IPs individuales, rangos (`192.168.1.1-192.168.1.254`) y notación CIDR (`192.168.1.0/24`).
 *   ⚙️ **Control Total del Escaneo**: Parámetros configurables para timeouts, reintentos, ancho de banda, aleatorización y más.
 
@@ -58,11 +61,17 @@ sudo ./go-arpscan --localnet
 # Escanear una subred completa usando notación CIDR y especificando la interfaz
 sudo ./go-arpscan -i eno1 192.168.24.0/24
 
-# Escanear un rango de IPs y mostrar el tiempo de respuesta (RTT)
-sudo ./go-arpscan -i eno1 -D 192.168.24.1-192.168.24.100
+# Escanear un rango, mostrar RTT y guardar las respuestas para análisis en Wireshark
+sudo ./go-arpscan -i eno1 -D -W scan_results.pcap 192.168.24.1-192.168.24.100
 
 # Leer objetivos desde un fichero, con salida simple para procesar con otros scripts
 sudo ./go-arpscan -f hosts.txt -x
+
+# Obtener los resultados en formato JSON y procesarlos con jq
+sudo ./go-arpscan --localnet --json | jq '.results[] | {ip, mac, vendor}'
+
+# Guardar los resultados en un fichero CSV para analizarlos en una hoja de cálculo
+sudo ./go-arpscan --localnet --csv > network_scan.csv
 ```
 
 ### Ejemplo de Salida
@@ -100,7 +109,10 @@ IP Address         MAC Address          Status          Vendor
 | | `--macfile` | `string` | Fichero de mapeo MAC personalizado. | `""` |
 | `-q` | `--quiet` | `bool` | Salida mínima (solo IP y MAC). | `false` |
 | `-x` | `--plain` | `bool` | Salida simple sin cabeceras/pies, para scripts. | `false` |
+| | `--json` | `bool` | Muestra la salida completa en formato JSON. | `false` |
+| | `--csv` | `bool` | Muestra la salida en formato CSV (Comma-Separated Values). | `false` |
 | `-D` | `--rtt` | `bool` | Mostrar el tiempo de ida y vuelta (Round-Trip Time). | `false` |
+| `-W` | `--pcapsavefile`| `string` | Guardar respuestas ARP (ARP Reply) en un fichero pcap `<s>` para análisis en Wireshark. | `""` |
 | `-g` | `--ignoredups` | `bool` | No mostrar respuestas duplicadas. | `false` |
 | | `--color` | `string` | Controlar el uso de color en la salida (`auto`, `on`, `off`). | `auto` |
 | `-R` | `--random` | `bool` | Aleatorizar el orden de los hosts a escanear. | `false` |
@@ -116,31 +128,35 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 
 ### ✅ Fase 1 y 2: Fundación y Usabilidad Esencial (COMPLETADO)
 
-Esta fase se centró en replicar las funcionalidades más comunes de `arp-scan` y añadir mejoras significativas de usabilidad.
-
-*   **Fundamentos de CLI**: `--help`, `--version`, `--verbose`.
-*   **Gestión de Objetivos**: `--file`, `--localnet`, rangos IP y CIDR.
-*   **Control del Escaneo**: `--retry`, `--host-timeout`, `--scan-timeout` (con auto-cálculo), `--interval`, `--bandwidth`, `--backoff`, `--random`, `--randomseed`.
-*   **Control de la Salida**: `--quiet`, `--plain`, `--rtt`, y el nuevo `--color`.
-*   **Configuración Básica de Paquetes**: `--arpspa`.
-*   **Motor y Usabilidad**:
-    *   [✅] **Auto-detección de Interfaz Inteligente**: No es necesario especificar `-i` en la mayoría de los casos.
-    *   [✅] **Gestión Automática de Ficheros de Vendor**: Descarga y parseo de `oui.txt` e `iab.txt`.
-    *   [✅] **Diagnósticos Mejorados**: Detección de `(CONFLICT)` y `(Multi-IP)`.
-    *   [✅] **Ficheros de Vendor Personalizados**: Soporte para `--ouifile`, `--iabfile` y `--macfile`.
-    *   [✅] **Soporte para Hostnames**: Resolución de nombres de host en los objetivos (desactivable con `--numeric`).
-    *   [✅] **Ignorar Duplicados**: Opción `--ignoredups` para una salida más limpia.
+Esta fase se centró en replicar las funcionalidades más comunes de `arp-scan` y añadir mejoras significativas de usabilidad como la auto-detección de interfaz, descarga de ficheros de vendors, diagnósticos de red y control total sobre el escaneo y la salida.
 
 ### [🔲] Fase 3: Manipulación Avanzada de Paquetes (Paridad de "Power-User")
 
-*   **Control de la Trama Ethernet**: `--vlan`, `--srcaddr`, `--destaddr`, `--prototype`.
-*   **Control del Paquete ARP**: `--arpsha`, `--arpop`, `--arptha`, `--arphrd`, `--arppro`, etc.
-*   **Framing y Datos Adicionales**: `--padding`, `--llc`.
+*Objetivo: Implementar el arsenal completo de manipulación de paquetes de arp-scan para atraer a los usuarios avanzados, pentesters y administradores de red.*
 
-### [🔲] Fase 4: Integración con el Ecosistema Moderno
+**Paso 3.1: Control Total de la Trama Ethernet (Alta Aportación para expertos)**
+*   [🔲] `--vlan=<i>`, `-Q <i>`: Esencial para escanear redes corporativas segmentadas.
+*   [🔲] `--srcaddr=<m>`, `-S <m>` y [🔲] `--destaddr=<m>`, `-T <m>`: Permite técnicas de spoofing y escaneo dirigido.
+*   [🔲] `--prototype=<i>`, `-y <i>`: Control del EtherType.
 
-*   **Salida Estructurada**: `--json` y `--csv` para una integración sencilla con scripts y herramientas de análisis.
-*   **Interoperabilidad**: `--pcapsavefile` para guardar respuestas y analizarlas con Wireshark/tcpdump, y `--snap`.
+**Paso 3.2: Control Total del Paquete ARP (Media Aportación para expertos)**
+*   [🔲] `--arpsha=<m>`, `-u <m>` y [🔲] `--arpop=<i>`, `-o <i>`: Los dos flags de manipulación ARP más útiles para fingerprinting.
+*   [🔲] `--arptha`, `--arphrd`, `--arppro`, `--arphln`, `--arppln`: El resto de los flags para una compatibilidad del 100%.
+
+**Paso 3.3: Framing y Datos Adicionales (Baja Aportación)**
+*   [🔲] `--padding=<h>`, `-A <h>` y [🔲] `--llc`, `-L`: Funcionalidades de nicho para replicar por completo a arp-scan.
+
+### ✅ Fase 4: Integración con el Ecosistema Moderno (COMPLETADO)
+
+*Objetivo: Hacer que go-arpscan no solo sea una herramienta, sino una pieza integrable en flujos de trabajo automatizados.*
+
+**Paso 4.1: Salida Estructurada (Aportación CRÍTICA)**
+*   [✅] `--json`: La funcionalidad "killer" que nos pone por delante. Permite una integración trivial con cualquier script (Python, Bash con jq, etc.).
+*   [✅] `--csv`: Salida CSV para análisis de datos e importación directa en hojas de cálculo.
+
+**Paso 4.2: Interoperabilidad con Herramientas de Red (Alta Aportación)**
+*   [✅] `--pcapsavefile=<s>`, `-W <s>`: Guardar respuestas en formato pcap para análisis en Wireshark. Invaluable para la depuración y el análisis forense.
+*   [🔲] `--snap=<i>`, `-n <i>`: Controlar el snaplen de pcap.
 
 ### [🔲] Fase 5: Funcionalidades Visionarias
 
@@ -156,3 +172,4 @@ Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la 
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el fichero `LICENSE` para más detalles.
+```
