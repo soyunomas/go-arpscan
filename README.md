@@ -6,11 +6,6 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 
 `go-arpscan` envía paquetes ARP a los hosts de la red local para descubrir dispositivos activos y recopilar sus direcciones IP y MAC. Aprovecha la concurrencia de Go para escanear redes de forma extremadamente rápida, incluso con un gran número de hosts.
 
-El objetivo de este proyecto es ofrecer una alternativa moderna a `arp-scan` que sea:
-*   **Más Fácil de Usar**: Con auto-detección de interfaz y descarga automática de ficheros de vendors.
-*   **Más Informativa**: Con una salida coloreada y diagnósticos claros para conflictos de IP y dispositivos Multi-IP.
-*   **Nativa y Portable**: Compilada en un único binario sin dependencias externas.
-
 ## Características Principales
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
