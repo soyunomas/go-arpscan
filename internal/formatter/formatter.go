@@ -163,11 +163,9 @@ func (f *PlainFormatter) PrintResult(result scanner.ScanResult) {
 	f.DefaultFormatter.printRow(result.IP, result.MAC, result.RTT.String(), result.Status, result.Vendor, false)
 }
 
-// <-- INICIO BLOQUE MODIFICADO: EL FOOTER AHORA NO HACE NADA -->
 func (f *PlainFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {
 	// En modo 'plain', no queremos ningún pie de página, ni siquiera los resúmenes.
 }
-// <-- FIN BLOQUE MODIFICADO -->
 
 // --- CSV Formatter ---
 type CSVFormatter struct {
@@ -208,9 +206,10 @@ func (f *CSVFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries 
 }
 
 // --- JSON Formatter ---
-// jsonResult define la estructura de cada resultado individual en la salida JSON.
+// <-- INICIO BLOQUE MODIFICADO: ESTRUCTURAS EXPORTADAS PARA REUTILIZACIÓN -->
+// JSONResult define la estructura de cada resultado individual en la salida JSON.
 // Usamos tags para controlar los nombres de los campos y 'omitempty' para ocultar campos vacíos.
-type jsonResult struct {
+type JSONResult struct {
 	IP     string `json:"ip"`
 	MAC    string `json:"mac"`
 	RTTms  int64  `json:"rtt_ms"`
@@ -218,14 +217,16 @@ type jsonResult struct {
 	Status string `json:"status,omitempty"`
 }
 
-// jsonOutput define la estructura del objeto JSON raíz.
-type jsonOutput struct {
-	Results []jsonResult `json:"results"`
+// JSONOutput define la estructura del objeto JSON raíz.
+type JSONOutput struct {
+	Results []JSONResult `json:"results"`
 	Summary struct {
 		Conflicts []string `json:"conflicts,omitempty"`
 		MultiIP   []string `json:"multi_ip,omitempty"`
 	} `json:"summary"`
 }
+
+// <-- FIN BLOQUE MODIFICADO -->
 
 type JSONFormatter struct {
 	results []scanner.ScanResult
@@ -247,14 +248,15 @@ func (f *JSONFormatter) PrintResult(result scanner.ScanResult) {
 }
 
 func (f *JSONFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {
-	output := jsonOutput{}
+	// <-- INICIO BLOQUE MODIFICADO: USAR LAS ESTRUCTURAS EXPORTADAS -->
+	output := JSONOutput{}
 	output.Summary.Conflicts = conflictSummaries
 	output.Summary.MultiIP = multiIPSummaries
-	output.Results = make([]jsonResult, len(f.results))
+	output.Results = make([]JSONResult, len(f.results))
 
 	// Transformamos los resultados del scanner a nuestro formato JSON deseado.
 	for i, r := range f.results {
-		output.Results[i] = jsonResult{
+		output.Results[i] = JSONResult{
 			IP:     r.IP,
 			MAC:    r.MAC,
 			RTTms:  r.RTT.Milliseconds(),
@@ -262,6 +264,7 @@ func (f *JSONFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries
 			Status: r.Status,
 		}
 	}
+	// <-- FIN BLOQUE MODIFICADO -->
 
 	// Serializamos la estructura completa a JSON con indentación.
 	jsonData, err := json.MarshalIndent(output, "", "  ")

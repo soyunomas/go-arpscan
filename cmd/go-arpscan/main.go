@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"go-arpscan/internal/formatter"
 	"go-arpscan/internal/network"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -60,10 +62,11 @@ var (
 	ignoreDups    bool
 	colorMode     string
 	pcapSaveFile  string
-	// <-- INICIO BLOQUE MODIFICADO: NUEVOS FLAGS -->
-	vlanID  int
-	snaplen int
-	// <-- FIN BLOQUE MODIFICADO -->
+	vlanID        int
+	snaplen       int
+	stateFilePath string
+	diffMode      bool
+	showProgress  bool
 )
 
 var rootCmd = &cobra.Command{
@@ -86,7 +89,7 @@ dada, o IPstart-IPend (p. ej., 192.168.1.3-192.168.1.27) para especificar todos 
 el rango inclusivo.
 
 Reporta bugs o envía sugerencias a tu mentor Gopher.`,
-	Example: `  sudo ./go-arpscan --localnet
+	Example: `  sudo ./go-arpscan --localnet --progress
   sudo ./go-arpscan -i eth0 192.168.1.0/24
   sudo ./go-arpscan -i eth0 192.168.1.1-192.168.1.254
   sudo ./go-arpscan --file=hostlist.txt --json
@@ -119,6 +122,15 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			log.Fatal("Error: los flags de formato (--json, --csv, --quiet, --plain) son mutuamente excluyentes.")
 		}
 
+		if diffMode {
+			if stateFilePath == "" {
+				log.Fatal("Error: el modo --diff requiere que se especifique un fichero de estado con --state-file.")
+			}
+			if formatFlags > 0 {
+				log.Fatal("Error: el modo --diff no se puede combinar con otros flags de formato de salida (--json, --csv, etc.).")
+			}
+		}
+
 		switch strings.ToLower(colorMode) {
 		case "off":
 			color.NoColor = true
@@ -148,11 +160,9 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			log.Printf("Ancho de banda establecido en %s. Intervalo entre paquetes calculado: %v", bandwidth, interval)
 		}
 
-		// <-- INICIO BLOQUE MODIFICADO: VALIDACIÓN DE VLAN ID -->
 		if vlanID != 0 && (vlanID < 1 || vlanID > 4094) {
 			log.Fatalf("Error: el ID de VLAN debe estar entre 1 y 4094.")
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
 
 		var iface *net.Interface
 		var localnetCIDR *net.IPNet
@@ -282,7 +292,10 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			log.Fatalf("Error cargando la base de datos de vendedores: %v", err)
 		}
 
-		// <-- INICIO BLOQUE MODIFICADO: PASAR NUEVOS VALORES A LA CONFIGURACIÓN -->
+		var bar *progressbar.ProgressBar
+		isScriptingOutput := jsonOutput || csvOutput || plain || quiet
+		shouldShowProgressBar := showProgress && !isScriptingOutput
+
 		config := &scanner.Config{
 			Interface:     iface,
 			IPs:           ips,
@@ -298,100 +311,267 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			VlanID:        uint16(vlanID),
 			Snaplen:       snaplen,
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
 
-		var f formatter.Formatter
-		if jsonOutput {
-			f = formatter.NewJSONFormatter()
-		} else if csvOutput {
-			f = formatter.NewCSVFormatter()
-		} else if quiet {
-			f = formatter.NewQuietFormatter()
-		} else if plain {
-			f = formatter.NewPlainFormatter(showRTT)
-		} else {
-			f = formatter.NewDefaultFormatter(showRTT)
+		if shouldShowProgressBar {
+			bar = progressbar.NewOptions(
+				len(config.IPs)*config.Retry,
+				progressbar.OptionSetWriter(os.Stderr),
+				progressbar.OptionShowCount(),
+				progressbar.OptionSetWidth(30),
+				progressbar.OptionSpinnerType(14),
+				progressbar.OptionFullWidth(),
+			)
+			config.ProgressBar = bar
 		}
 
-		isScriptingOutput := jsonOutput || csvOutput || plain || quiet
-		if !isScriptingOutput {
-			log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
-			if config.VlanID > 0 {
-				log.Printf("Usando VLAN tag: %d", config.VlanID)
-			}
-			log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
-			if arpSPA != "" {
-				log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
-			} else {
-				log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
-			}
-			if pcapSaveFile != "" {
-				log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
-			}
-		}
-
-		resultsChan, err := scanner.StartScan(config)
-		if err != nil {
-			log.Fatalf("Error iniciando el escaneo: %v", err)
-		}
-
-		f.PrintHeader()
-
-		seenIPs := make(map[string]string)
-		seenMACs := make(map[string][]string)
-		var conflictSummaries []string
-
-		for result := range resultsChan {
-			if previousMAC, found := seenIPs[result.IP]; found {
-				if ignoreDups {
-					if !isScriptingOutput && verboseCount >= 1 {
-						log.Printf("Respuesta duplicada/conflicto para %s (%s) ignorada.", result.IP, result.MAC)
-					}
-					continue
+		if !diffMode {
+			if !isScriptingOutput && stateFilePath == "" {
+				log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
+				if config.VlanID > 0 {
+					log.Printf("Usando VLAN tag: %d", config.VlanID)
 				}
-				if previousMAC != result.MAC {
-					result.Status = "(CONFLICT)"
-					summary := fmt.Sprintf("%s está en uso por %s y %s", result.IP, previousMAC, result.MAC)
-					conflictSummaries = append(conflictSummaries, summary)
+				log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
+				if arpSPA != "" {
+					log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
 				} else {
-					result.Status = "(DUPLICATE)"
+					log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
 				}
-			} else {
-				seenIPs[result.IP] = result.MAC
-			}
-
-			ipsForMAC := seenMACs[result.MAC]
-			isNewIPForThisMAC := true
-			for _, seenIP := range ipsForMAC {
-				if seenIP == result.IP {
-					isNewIPForThisMAC = false
-					break
-				}
-			}
-			if isNewIPForThisMAC {
-				seenMACs[result.MAC] = append(ipsForMAC, result.IP)
-				if len(seenMACs[result.MAC]) > 1 && result.Status == "" {
-					result.Status = "(Multi-IP)"
+				if pcapSaveFile != "" {
+					log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
 				}
 			}
 
-			f.PrintResult(result)
-		}
-
-		var multiIPSummaries []string
-		for mac, seenIPsForMac := range seenMACs {
-			if len(seenIPsForMac) > 1 {
-				summary := fmt.Sprintf("MAC %s responde para múltiples IPs: %s", mac, strings.Join(seenIPsForMac, ", "))
-				multiIPSummaries = append(multiIPSummaries, summary)
+			resultsChan, err := scanner.StartScan(config)
+			if err != nil {
+				log.Fatalf("Error iniciando el escaneo: %v", err)
 			}
-		}
 
-		f.PrintFooter(conflictSummaries, multiIPSummaries)
+			allResults := collectAndAnalyzeResults(resultsChan, ignoreDups, isScriptingOutput)
+			
+			// <-- INICIO BLOQUE MODIFICADO: Finalizar la barra de progreso -->
+			if bar != nil {
+				_ = bar.Finish()
+			}
+			// <-- FIN BLOQUE MODIFICADO -->
 
-		if !isScriptingOutput {
-			log.Println("Escaneo completado.")
+			if stateFilePath != "" {
+				saveStateToFile(allResults, stateFilePath)
+				if formatFlags == 0 {
+					return
+				}
+			}
+
+			printResults(allResults, isScriptingOutput)
+			if !isScriptingOutput {
+				log.Println("Escaneo completado.")
+			}
+		} else { // Modo --diff
+			runDiffMode(config, stateFilePath)
 		}
 	},
+}
+
+type hostInfo struct {
+	MAC    string
+	Vendor string
+}
+
+func runDiffMode(config *scanner.Config, stateFile string) {
+	log.Printf("Modo DIFF: Comparando el escaneo actual con el estado de '%s'", stateFile)
+
+	stateContent, err := os.ReadFile(stateFile)
+	if err != nil {
+		log.Fatalf("Error al leer el fichero de estado '%s': %v", stateFile, err)
+	}
+
+	var oldState formatter.JSONOutput
+	if err := json.Unmarshal(stateContent, &oldState); err != nil {
+		log.Fatalf("Error al parsear el fichero de estado JSON '%s': %v", stateFile, err)
+	}
+
+	oldStateMap := make(map[string]hostInfo)
+	for _, res := range oldState.Results {
+		oldStateMap[res.IP] = hostInfo{MAC: res.MAC, Vendor: res.Vendor}
+	}
+
+	log.Printf("Iniciando nuevo escaneo para la comparación...")
+	
+	// <-- INICIO BLOQUE MODIFICADO: Renombrar 'bar' para evitar solapamiento -->
+	var diffBar *progressbar.ProgressBar
+	if showProgress {
+		diffBar = progressbar.NewOptions(
+			len(config.IPs)*config.Retry,
+			progressbar.OptionSetWriter(os.Stderr),
+			progressbar.OptionShowCount(),
+			progressbar.OptionSetWidth(30),
+			progressbar.OptionSpinnerType(14),
+			progressbar.OptionFullWidth(),
+		)
+		config.ProgressBar = diffBar
+	}
+	// <-- FIN BLOQUE MODIFICADO -->
+
+	resultsChan, err := scanner.StartScan(config)
+	if err != nil {
+		log.Fatalf("Error iniciando el escaneo para diff: %v", err)
+	}
+	allNewResults := collectAndAnalyzeResults(resultsChan, false, true)
+	
+	// <-- INICIO BLOQUE MODIFICADO: Finalizar la barra de progreso en modo diff -->
+	if diffBar != nil {
+		_ = diffBar.Finish()
+	}
+	// <-- FIN BLOQUE MODIFICADO -->
+
+	newStateMap := make(map[string]hostInfo)
+	for _, res := range allNewResults.Results {
+		newStateMap[res.IP] = hostInfo{MAC: res.MAC, Vendor: res.Vendor}
+	}
+	log.Println("Escaneo de comparación completado. Analizando diferencias...")
+
+	addedColor := color.New(color.FgHiGreen).SprintFunc()
+	removedColor := color.New(color.FgHiRed).SprintFunc()
+	modifiedColor := color.New(color.FgHiYellow).SprintFunc()
+	headerColor := color.New(color.Bold).SprintFunc()
+
+	hasChanges := false
+
+	for ip, newInfo := range newStateMap {
+		if oldInfo, found := oldStateMap[ip]; !found {
+			fmt.Printf("%s\t%s\t%s\t(%s)\n", addedColor("[+] AÑADIDO:"), ip, newInfo.MAC, newInfo.Vendor)
+			hasChanges = true
+		} else {
+			if newInfo.MAC != oldInfo.MAC {
+				fmt.Printf("%s\t%s\n", modifiedColor("[~] MODIFICADO:"), headerColor(ip))
+				fmt.Printf("\t  %s %s (%s)\n", removedColor("- MAC ANTERIOR:"), oldInfo.MAC, oldInfo.Vendor)
+				fmt.Printf("\t  %s %s (%s)\n", addedColor("+ MAC NUEVA:   "), newInfo.MAC, newInfo.Vendor)
+				hasChanges = true
+			}
+			delete(oldStateMap, ip)
+		}
+	}
+
+	for ip, oldInfo := range oldStateMap {
+		fmt.Printf("%s\t%s\t%s\t(%s)\n", removedColor("[-] ELIMINADO:"), ip, oldInfo.MAC, oldInfo.Vendor)
+		hasChanges = true
+	}
+
+	if !hasChanges {
+		log.Println("No se detectaron cambios en la red.")
+	}
+}
+
+type AnalyzedResults struct {
+	Results           []scanner.ScanResult
+	ConflictSummaries []string
+	MultiIPSummaries  []string
+}
+
+func collectAndAnalyzeResults(resultsChan <-chan scanner.ScanResult, ignoreDups, isScriptingOutput bool) AnalyzedResults {
+	var allResults []scanner.ScanResult
+	seenIPs := make(map[string]string)
+	seenMACs := make(map[string][]string)
+	var conflictSummaries []string
+
+	for result := range resultsChan {
+		if previousMAC, found := seenIPs[result.IP]; found {
+			if ignoreDups {
+				if !isScriptingOutput && verboseCount >= 1 {
+					log.Printf("Respuesta duplicada/conflicto para %s (%s) ignorada.", result.IP, result.MAC)
+				}
+				continue
+			}
+			if previousMAC != result.MAC {
+				result.Status = "(CONFLICT)"
+				summary := fmt.Sprintf("%s está en uso por %s y %s", result.IP, previousMAC, result.MAC)
+				conflictSummaries = append(conflictSummaries, summary)
+			} else {
+				result.Status = "(DUPLICATE)"
+			}
+		} else {
+			seenIPs[result.IP] = result.MAC
+		}
+
+		ipsForMAC := seenMACs[result.MAC]
+		isNewIPForThisMAC := true
+		for _, seenIP := range ipsForMAC {
+			if seenIP == result.IP {
+				isNewIPForThisMAC = false
+				break
+			}
+		}
+		if isNewIPForThisMAC {
+			seenMACs[result.MAC] = append(ipsForMAC, result.IP)
+			if len(seenMACs[result.MAC]) > 1 && result.Status == "" {
+				result.Status = "(Multi-IP)"
+			}
+		}
+		allResults = append(allResults, result)
+	}
+
+	var multiIPSummaries []string
+	for mac, seenIPsForMac := range seenMACs {
+		if len(seenIPsForMac) > 1 {
+			summary := fmt.Sprintf("MAC %s responde para múltiples IPs: %s", mac, strings.Join(seenIPsForMac, ", "))
+			multiIPSummaries = append(multiIPSummaries, summary)
+		}
+	}
+	return AnalyzedResults{
+		Results:           allResults,
+		ConflictSummaries: conflictSummaries,
+		MultiIPSummaries:  multiIPSummaries,
+	}
+}
+
+func printResults(analyzed AnalyzedResults, isScriptingOutput bool) {
+	var f formatter.Formatter
+	if jsonOutput {
+		f = formatter.NewJSONFormatter()
+	} else if csvOutput {
+		f = formatter.NewCSVFormatter()
+	} else if quiet {
+		f = formatter.NewQuietFormatter()
+	} else if plain {
+		f = formatter.NewPlainFormatter(showRTT)
+	} else {
+		f = formatter.NewDefaultFormatter(showRTT)
+	}
+
+	f.PrintHeader()
+	for _, result := range analyzed.Results {
+		f.PrintResult(result)
+	}
+	f.PrintFooter(analyzed.ConflictSummaries, analyzed.MultiIPSummaries)
+}
+
+func saveStateToFile(analyzed AnalyzedResults, filePath string) {
+	output := formatter.JSONOutput{}
+	output.Summary.Conflicts = analyzed.ConflictSummaries
+	output.Summary.MultiIP = analyzed.MultiIPSummaries
+	output.Results = make([]formatter.JSONResult, len(analyzed.Results))
+
+	for i, r := range analyzed.Results {
+		output.Results[i] = formatter.JSONResult{
+			IP:     r.IP,
+			MAC:    r.MAC,
+			RTTms:  r.RTT.Milliseconds(),
+			Vendor: r.Vendor,
+			Status: r.Status,
+		}
+	}
+
+	jsonData, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		log.Printf("Error CRÍTICO al generar JSON para el fichero de estado: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(filePath, jsonData, 0644); err != nil {
+		log.Printf("Error CRÍTICO al escribir en el fichero de estado '%s': %v", filePath, err)
+		return
+	}
+
+	log.Printf("Estado del escaneo guardado exitosamente en %s", filePath)
 }
 
 func init() {
@@ -424,18 +604,20 @@ func init() {
 	rootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Muestra la salida completa en formato JSON.")
 	rootCmd.Flags().BoolVar(&csvOutput, "csv", false, "Muestra la salida en formato CSV (Comma-Separated Values).")
 
+	rootCmd.Flags().StringVar(&stateFilePath, "state-file", "", "Guarda los resultados del escaneo en un fichero de estado JSON <s>.\nSi se usa sin --diff, suprime la salida estándar.")
+	rootCmd.Flags().BoolVar(&diffMode, "diff", false, "Compara un nuevo escaneo con el fichero de estado especificado en --state-file\ny muestra las diferencias (hosts añadidos, eliminados o modificados).")
+
+	rootCmd.Flags().BoolVar(&showProgress, "progress", false, "Muestra una barra de progreso durante el escaneo.")
 	rootCmd.Flags().BoolVarP(&showRTT, "rtt", "D", false, "Muestra el tiempo de ida y vuelta (Round-Trip Time) del paquete.")
-	rootCmd.Flags().StringVarP(&pcapSaveFile, "pcapsavefile", "W", "", "Guarda las respuestas ARP en un fichero pcap <s>.")
+	rootCmd.Flags().StringVarP(&pcapSaveFile, "pcapsavefile", "W", "", "Guarda las respuestas ARP en un fichero pcap s>.")
 	rootCmd.Flags().BoolVarP(&ignoreDups, "ignoredups", "g", false, "No mostrar respuestas duplicadas.")
 	rootCmd.Flags().StringVar(&colorMode, "color", "auto", "Controla el uso de color en la salida (auto, on, off).")
 
 	rootCmd.Flags().BoolVarP(&random, "random", "R", false, "Aleatoriza el orden de los hosts en la lista de objetivos.\nEsto hace que los paquetes ARP se envíen en un orden aleatorio.")
 	rootCmd.Flags().Int64Var(&randomSeed, "randomseed", 0, "Usa <i> como semilla para el generador de números pseudoaleatorios.\nÚtil para obtener un orden aleatorio reproducible. Solo efectivo con --random.")
 
-	// <-- INICIO BLOQUE MODIFICADO: AÑADIR NUEVOS FLAGS -->
 	rootCmd.Flags().IntVarP(&vlanID, "vlan", "Q", 0, "Especifica el ID de VLAN 802.1Q <i> (1-4094).")
 	rootCmd.Flags().IntVarP(&snaplen, "snap", "n", 65536, "Establece la longitud de captura pcap a <i> bytes.")
-	// <-- FIN BLOQUE MODIFICADO -->
 
 	rootCmd.Flags().CountVarP(&verboseCount, "verbose", "v", "Muestra mensajes de progreso detallados.\nÚsalo más de una vez para mayor efecto (-v, -vv, -vvv):\n1: Muestra finalización de pasadas y hosts desconocidos.\n2: Muestra cada paquete enviado/recibido y el filtro pcap.\n3. Muestra la lista de hosts antes de iniciar el escaneo.")
 	rootCmd.Flags().BoolVarP(&versionFlag, "version", "V", false, "Muestra la versión del programa y sale.")

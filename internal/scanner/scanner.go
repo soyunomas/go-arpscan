@@ -16,6 +16,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/pcapgo"
+	"github.com/schollz/progressbar/v3"
 )
 
 type ScanResult struct {
@@ -26,7 +27,6 @@ type ScanResult struct {
 	Status string
 }
 
-// <-- INICIO BLOQUE MODIFICADO: AÑADIR CAMPOS A CONFIG -->
 type Config struct {
 	Interface     *net.Interface
 	IPs           []net.IP
@@ -39,11 +39,10 @@ type Config struct {
 	ArpSPA        net.IP
 	Verbosity     int
 	PcapSaveFile  string
-	VlanID        uint16 // Añadido para VLAN tagging
-	Snaplen       int    // Añadido para controlar el snaplen
+	VlanID        uint16
+	Snaplen       int
+	ProgressBar   *progressbar.ProgressBar
 }
-
-// <-- FIN BLOQUE MODIFICADO -->
 
 type targetStatus int
 
@@ -67,12 +66,10 @@ const (
 )
 
 func StartScan(cfg *Config) (<-chan ScanResult, error) {
-	// <-- INICIO BLOQUE MODIFICADO: USAR CFG.SNAPLEN -->
 	handle, err := pcap.OpenLive(cfg.Interface.Name, int32(cfg.Snaplen), true, pcap.BlockForever)
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo abrir el handle de pcap: %w", err)
 	}
-	// <-- FIN BLOQUE MODIFICADO -->
 
 	bpfFilter := "arp"
 	if cfg.VlanID > 0 {
@@ -101,12 +98,10 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 			} else {
 				defer f.Close()
 				pcapWriter = pcapgo.NewWriter(f)
-				// <-- INICIO BLOQUE MODIFICADO: USAR CFG.SNAPLEN EN PCAP HEADER -->
 				if err := pcapWriter.WriteFileHeader(uint32(cfg.Snaplen), handle.LinkType()); err != nil {
 					log.Printf("CRÍTICO: No se pudo escribir la cabecera del archivo pcap: %v.", err)
 					pcapWriter = nil
 				}
-				// <-- FIN BLOQUE MODIFICADO -->
 			}
 		}
 
@@ -143,6 +138,14 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 
 		passCounter := 0
 
+		if cfg.ProgressBar != nil {
+			if cfg.Retry > 1 {
+				cfg.ProgressBar.Describe(fmt.Sprintf("Pase 1/%d: Sondeando...", cfg.Retry))
+			} else {
+				cfg.ProgressBar.Describe("Sondeando...")
+			}
+		}
+
 	main_loop:
 		for {
 			select {
@@ -159,10 +162,23 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 					continue
 				}
 
-				if targetToSend.SentCount == passCounter && cfg.Verbosity >= 1 {
-					log.Printf("Fin de la pasada %d. Hosts restantes: %d", passCounter+1, countRemainingTargets(targets))
-					passCounter++
+				// <-- INICIO BLOQUE MODIFICADO: Lógica de cambio de pasada corregida -->
+				// targetToSend.SentCount es el número de envíos ya realizados (0 para la primera pasada).
+				// Si el número de envíos de este target es mayor que nuestro contador de pasadas actual,
+				// significa que estamos empezando una nueva pasada.
+				if targetToSend.SentCount > passCounter {
+					if cfg.Verbosity >= 1 {
+						// La pasada que acaba de terminar es passCounter + 1
+						log.Printf("Fin de la pasada %d. Hosts restantes: %d", passCounter+1, countRemainingTargets(targets))
+					}
+					// Actualizamos nuestro contador a la pasada actual
+					passCounter = targetToSend.SentCount
+					if cfg.ProgressBar != nil {
+						// La nueva pasada que empieza es passCounter + 1
+						cfg.ProgressBar.Describe(fmt.Sprintf("Pase %d/%d: Reintentando...", passCounter+1, cfg.Retry))
+					}
 				}
+				// <-- FIN BLOQUE MODIFICADO -->
 
 				targetToSend.mu.Lock()
 				targetToSend.Status = StatusSent
@@ -260,6 +276,10 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 				log.Printf("Enviando ARP a %s desde %s", dstIPv4, sourceIP)
 			}
 			sendARP(handle, cfg.Interface, sourceIP, dstIPv4, cfg.VlanID)
+
+			if cfg.ProgressBar != nil {
+				cfg.ProgressBar.Add(1)
+			}
 		}
 	}
 }
@@ -377,16 +397,12 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 	}
 }
 
-// <-- INICIO BLOQUE MODIFICADO: FUNCIÓN SENDARP AHORA ACEPTA VLANID Y CONSTRUYE PAQUETES CON TAG -->
 func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vlanID uint16) {
-	// 1. Capa Ethernet (siempre presente)
 	eth := layers.Ethernet{
 		SrcMAC: iface.HardwareAddr,
 		DstMAC: net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
-		// El EtherType se decidirá en función de si hay VLAN o no.
 	}
 
-	// 2. Capa ARP (siempre presente)
 	arp := layers.ARP{
 		AddrType:          layers.LinkTypeEthernet,
 		Protocol:          layers.EthernetTypeIPv4,
@@ -403,7 +419,6 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vla
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 	var err error
 
-	// 3. Serializar las capas. Si hay VLAN, se inserta una capa Dot1Q.
 	if vlanID > 0 {
 		eth.EthernetType = layers.EthernetTypeDot1Q
 		dot1q := layers.Dot1Q{
@@ -425,8 +440,6 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vla
 		log.Printf("Error enviando paquete para %s: %v", dstIP, err)
 	}
 }
-
-// <-- FIN BLOQUE MODIFICADO -->
 
 func GetSrcIPNet(iface *net.Interface) (*net.IPNet, error) {
 	addrs, err := iface.Addrs()
