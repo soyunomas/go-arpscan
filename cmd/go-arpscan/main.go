@@ -21,13 +21,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ... (constantes y variables globales sin cambios)
 const (
-	ouiFileDefaultName = "oui.txt"
-	iabFileDefaultName = "iab.txt"
-	macFileDefaultName = ""
-	ouiURL             = "https://standards-oui.ieee.org/oui/oui.txt"
-	iabURL             = "https://standards-oui.ieee.org/iab/iab.txt"
+	ouiFileDefaultName  = "oui.txt"
+	iabFileDefaultName  = "iab.txt"
+	macFileDefaultName  = ""
+	ouiURL              = "https://standards-oui.ieee.org/oui/oui.txt"
+	iabURL              = "https://standards-oui.ieee.org/iab/iab.txt"
 	effectivePacketBits = 672
 )
 
@@ -45,6 +44,8 @@ var (
 	arpSPA        string
 	quiet         bool
 	plain         bool
+	jsonOutput    bool
+	csvOutput     bool
 	showRTT       bool
 	random        bool
 	randomSeed    int64
@@ -58,10 +59,10 @@ var (
 	useLocalnet   bool
 	ignoreDups    bool
 	colorMode     string
+	pcapSaveFile  string
 )
 
 var rootCmd = &cobra.Command{
-	// ... (descripción y ejemplos sin cambios)
 	Use:   "go-arpscan [options] [hosts...]",
 	Short: "go-arpscan es un escáner de red ARP rápido y moderno escrito en Go.",
 	Long: `Envía paquetes ARP a los hosts de la red local y muestra las respuestas recibidas.
@@ -84,8 +85,8 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 	Example: `  sudo ./go-arpscan --localnet
   sudo ./go-arpscan -i eth0 192.168.1.0/24
   sudo ./go-arpscan -i eth0 192.168.1.1-192.168.1.254
-  sudo ./go-arpscan -i eth0 --file=hostlist.txt
-  sudo ./go-arpscan -i wlan0 --localnet`,
+  sudo ./go-arpscan --file=hostlist.txt --json
+  sudo ./go-arpscan -i wlan0 --localnet --pcapsavefile=capture.pcap`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		if versionFlag {
 			fmt.Printf("go-arpscan version %s\n", version)
@@ -95,6 +96,23 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if os.Geteuid() != 0 {
 			log.Fatal("Este programa debe ser ejecutado como root.")
+		}
+
+		formatFlags := 0
+		if jsonOutput {
+			formatFlags++
+		}
+		if csvOutput {
+			formatFlags++
+		}
+		if quiet {
+			formatFlags++
+		}
+		if plain {
+			formatFlags++
+		}
+		if formatFlags > 1 {
+			log.Fatal("Error: los flags de formato (--json, --csv, --quiet, --plain) son mutuamente excluyentes.")
 		}
 
 		switch strings.ToLower(colorMode) {
@@ -265,23 +283,39 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			BackoffFactor: backoffFactor,
 			ArpSPA:        finalArpSPA,
 			Verbosity:     verboseCount,
+			PcapSaveFile:  pcapSaveFile,
 		}
 
 		var f formatter.Formatter
-		if quiet {
+		if jsonOutput {
+			f = formatter.NewJSONFormatter()
+		} else if csvOutput {
+			f = formatter.NewCSVFormatter()
+		} else if quiet {
 			f = formatter.NewQuietFormatter()
 		} else if plain {
 			f = formatter.NewPlainFormatter(showRTT)
 		} else {
 			f = formatter.NewDefaultFormatter(showRTT)
 		}
-		log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
-		log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
-		if arpSPA != "" {
-			log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
-		} else {
-			log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
+
+		// <-- INICIO BLOQUE MODIFICADO: LÓGICA DE LOGS CORREGIDA -->
+		// Solo mostrar logs si la salida NO es para scripts (json, csv, plain, quiet)
+		isScriptingOutput := jsonOutput || csvOutput || plain || quiet
+		if !isScriptingOutput {
+			log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
+			log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
+			if arpSPA != "" {
+				log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
+			} else {
+				log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
+			}
+			if pcapSaveFile != "" {
+				log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
+			}
 		}
+		// <-- FIN BLOQUE MODIFICADO -->
+
 		resultsChan, err := scanner.StartScan(config)
 		if err != nil {
 			log.Fatalf("Error iniciando el escaneo: %v", err)
@@ -289,16 +323,15 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 
 		f.PrintHeader()
 
-		// <-- INICIO BLOQUE MODIFICADO: AÑADIR SEGUIMIENTO DE MACs -->
-		seenIPs := make(map[string]string)      // Para conflictos de IP (IP -> MAC)
-		seenMACs := make(map[string][]string)   // Para MACs multi-IP (MAC -> []IP)
+		seenIPs := make(map[string]string)
+		seenMACs := make(map[string][]string)
 		var conflictSummaries []string
-		
+
 		for result := range resultsChan {
-			// Lógica 1: Detección de Conflicto de IP / Duplicado
 			if previousMAC, found := seenIPs[result.IP]; found {
 				if ignoreDups {
-					if verboseCount >= 1 {
+					// En modo no-script, loguear si la verbosidad es alta
+					if !isScriptingOutput && verboseCount >= 1 {
 						log.Printf("Respuesta duplicada/conflicto para %s (%s) ignorada.", result.IP, result.MAC)
 					}
 					continue
@@ -314,7 +347,6 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 				seenIPs[result.IP] = result.MAC
 			}
 
-			// Lógica 2: Detección de MAC Multi-IP
 			ipsForMAC := seenMACs[result.MAC]
 			isNewIPForThisMAC := true
 			for _, seenIP := range ipsForMAC {
@@ -329,12 +361,10 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 					result.Status = "(Multi-IP)"
 				}
 			}
-			// <-- FIN BLOQUE MODIFICADO -->
 
 			f.PrintResult(result)
 		}
 
-		// <-- INICIO BLOQUE MODIFICADO: GENERAR RESUMEN MULTI-IP Y PASARLO AL FOOTER -->
 		var multiIPSummaries []string
 		for mac, seenIPsForMac := range seenMACs {
 			if len(seenIPsForMac) > 1 {
@@ -344,14 +374,16 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 		}
 
 		f.PrintFooter(conflictSummaries, multiIPSummaries)
-		// <-- FIN BLOQUE MODIFICADO -->
 
-		log.Println("Escaneo completado.")
+		// <-- INICIO BLOQUE MODIFICADO: LÓGICA DE LOGS CORREGIDA -->
+		if !isScriptingOutput {
+			log.Println("Escaneo completado.")
+		}
+		// <-- FIN BLOQUE MODIFICADO -->
 	},
 }
 
 func init() {
-	// ... (init sin cambios)
 	cobra.EnableCommandSorting = false
 	rootCmd.PersistentFlags().SortFlags = false
 	rootCmd.Flags().SortFlags = false
@@ -378,7 +410,11 @@ func init() {
 
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Muestra solo salida mínima (IP y MAC).\nNo se realiza decodificación de protocolos y no se usan los ficheros de mapeo OUI.")
 	rootCmd.Flags().BoolVarP(&plain, "plain", "x", false, "Muestra una salida simple que solo contiene los hosts que responden.\nSuprime la cabecera y el pie de página, útil para scripts.")
+	rootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Muestra la salida completa en formato JSON.")
+	rootCmd.Flags().BoolVar(&csvOutput, "csv", false, "Muestra la salida en formato CSV (Comma-Separated Values).")
+
 	rootCmd.Flags().BoolVarP(&showRTT, "rtt", "D", false, "Muestra el tiempo de ida y vuelta (Round-Trip Time) del paquete.")
+	rootCmd.Flags().StringVarP(&pcapSaveFile, "pcapsavefile", "W", "", "Guarda las respuestas ARP en un fichero pcap <s>.")
 	rootCmd.Flags().BoolVarP(&ignoreDups, "ignoredups", "g", false, "No mostrar respuestas duplicadas.")
 	rootCmd.Flags().StringVar(&colorMode, "color", "auto", "Controla el uso de color en la salida (auto, on, off).")
 
