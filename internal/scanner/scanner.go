@@ -37,7 +37,11 @@ type Config struct {
 	Interval      time.Duration
 	BackoffFactor float64
 	ArpSPA        net.IP
-	ArpSHA        net.HardwareAddr // <-- NUEVO CAMPO
+	ArpSHA        net.HardwareAddr
+	EthSrcMAC     net.HardwareAddr
+	ArpOpCode     uint16
+	EthDstMAC     net.HardwareAddr // <-- NUEVO CAMPO
+	ArpTHA        net.HardwareAddr // <-- NUEVO CAMPO
 	Verbosity     int
 	PcapSaveFile  string
 	VlanID        uint16
@@ -267,9 +271,7 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 			if cfg.Verbosity >= 2 {
 				log.Printf("Enviando ARP a %s desde %s", dstIPv4, sourceIP)
 			}
-			// <-- INICIO BLOQUE MODIFICADO: Pasar ArpSHA a sendARP -->
-			sendARP(handle, cfg.Interface, sourceIP, dstIPv4, cfg.VlanID, cfg.ArpSHA)
-			// <-- FIN BLOQUE MODIFICADO -->
+			sendARP(handle, cfg.Interface, cfg, sourceIP, dstIPv4)
 
 			if cfg.ProgressBar != nil {
 				cfg.ProgressBar.Add(1)
@@ -353,18 +355,41 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 	}
 }
 
-// <-- INICIO BLOQUE MODIFICADO: Lógica para usar ArpSHA en la construcción del paquete -->
-func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vlanID uint16, arpSHA net.HardwareAddr) {
-	eth := layers.Ethernet{
-		SrcMAC: iface.HardwareAddr,
-		DstMAC: net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstIP net.IP) {
+	var sourceEthMAC net.HardwareAddr
+	if cfg.EthSrcMAC != nil {
+		sourceEthMAC = cfg.EthSrcMAC
+	} else {
+		sourceEthMAC = iface.HardwareAddr
 	}
 
-	var sourceHwAddress net.HardwareAddr
-	if arpSHA != nil {
-		sourceHwAddress = arpSHA
+	// <-- INICIO BLOQUE MODIFICADO: Usar cfg.EthDstMAC -->
+	var destinationEthMAC net.HardwareAddr
+	if cfg.EthDstMAC != nil {
+		destinationEthMAC = cfg.EthDstMAC
 	} else {
-		sourceHwAddress = iface.HardwareAddr
+		destinationEthMAC = net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff} // Broadcast
+	}
+
+	eth := layers.Ethernet{
+		SrcMAC: sourceEthMAC,
+		DstMAC: destinationEthMAC,
+	}
+	// <-- FIN BLOQUE MODIFICADO -->
+
+	var sourceArpSHA net.HardwareAddr
+	if cfg.ArpSHA != nil {
+		sourceArpSHA = cfg.ArpSHA
+	} else {
+		sourceArpSHA = iface.HardwareAddr
+	}
+
+	// <-- INICIO BLOQUE MODIFICADO: Usar cfg.ArpTHA -->
+	var destinationArpTHA []byte
+	if cfg.ArpTHA != nil {
+		destinationArpTHA = []byte(cfg.ArpTHA)
+	} else {
+		destinationArpTHA = []byte{0, 0, 0, 0, 0, 0}
 	}
 
 	arp := layers.ARP{
@@ -372,10 +397,10 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vla
 		Protocol:          layers.EthernetTypeIPv4,
 		HwAddressSize:     6,
 		ProtAddressSize:   4,
-		Operation:         layers.ARPRequest,
-		SourceHwAddress:   []byte(sourceHwAddress),
+		Operation:         cfg.ArpOpCode,
+		SourceHwAddress:   []byte(sourceArpSHA),
 		SourceProtAddress: []byte(srcIP.To4()),
-		DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
+		DstHwAddress:      destinationArpTHA,
 		DstProtAddress:    []byte(dstIP.To4()),
 	}
 	// <-- FIN BLOQUE MODIFICADO -->
@@ -384,10 +409,10 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vla
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 	var err error
 
-	if vlanID > 0 {
+	if cfg.VlanID > 0 {
 		eth.EthernetType = layers.EthernetTypeDot1Q
 		dot1q := layers.Dot1Q{
-			VLANIdentifier: vlanID,
+			VLANIdentifier: cfg.VlanID,
 			Type:           layers.EthernetTypeARP,
 		}
 		err = gopacket.SerializeLayers(buf, opts, &eth, &dot1q, &arp)

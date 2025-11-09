@@ -44,7 +44,11 @@ var (
 	interval      time.Duration
 	backoffFactor float64
 	arpSPA        string
-	arpSHA        string // <-- NUEVO FLAG
+	arpSHA        string
+	ethSrcMAC     string
+	arpOpCode     int
+	ethDstMAC     string
+	arpTHA        string
 	quiet         bool
 	plain         bool
 	jsonOutput    bool
@@ -192,7 +196,6 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			}
 		}
 
-		// <-- INICIO BLOQUE MODIFICADO: Validar MAC de --arpsha -->
 		var finalArpSHA net.HardwareAddr
 		if arpSHA != "" {
 			finalArpSHA, err = net.ParseMAC(arpSHA)
@@ -200,7 +203,30 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 				log.Fatalf("MAC de origen --arpsha inválida: %s. Error: %v", arpSHA, err)
 			}
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
+
+		var finalEthSrcMAC net.HardwareAddr
+		if ethSrcMAC != "" {
+			finalEthSrcMAC, err = net.ParseMAC(ethSrcMAC)
+			if err != nil {
+				log.Fatalf("MAC de origen Ethernet --srcaddr inválida: %s. Error: %v", ethSrcMAC, err)
+			}
+		}
+
+		var finalEthDstMAC net.HardwareAddr
+		if ethDstMAC != "" {
+			finalEthDstMAC, err = net.ParseMAC(ethDstMAC)
+			if err != nil {
+				log.Fatalf("MAC de destino Ethernet --destaddr inválida: %s. Error: %v", ethDstMAC, err)
+			}
+		}
+
+		var finalArpTHA net.HardwareAddr
+		if arpTHA != "" {
+			finalArpTHA, err = net.ParseMAC(arpTHA)
+			if err != nil {
+				log.Fatalf("MAC de destino ARP --arptha inválida: %s. Error: %v", arpTHA, err)
+			}
+		}
 
 		var targets []string
 		if useLocalnet {
@@ -315,55 +341,122 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			Interval:      interval,
 			BackoffFactor: backoffFactor,
 			ArpSPA:        finalArpSPA,
-			ArpSHA:        finalArpSHA, // <-- NUEVO CAMPO EN CONFIG
+			ArpSHA:        finalArpSHA,
+			EthSrcMAC:     finalEthSrcMAC,
+			ArpOpCode:     uint16(arpOpCode),
+			EthDstMAC:     finalEthDstMAC,
+			ArpTHA:        finalArpTHA,
 			Verbosity:     verboseCount,
 			PcapSaveFile:  pcapSaveFile,
 			VlanID:        uint16(vlanID),
 			Snaplen:       snaplen,
 		}
 
-		if !diffMode {
-			if !isScriptingOutput && stateFilePath == "" {
-				log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
-				if config.VlanID > 0 {
-					log.Printf("Usando VLAN tag: %d", config.VlanID)
-				}
-				log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
-				if arpSPA != "" {
-					log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
-				} else {
-					log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
-				}
-				// <-- INICIO BLOQUE MODIFICADO: Log para --arpsha -->
-				if arpSHA != "" {
-					log.Printf("Usando MAC de origen personalizada (SHA) para todos los paquetes: %s", finalArpSHA)
-				}
-				// <-- FIN BLOQUE MODIFICADO -->
-				if pcapSaveFile != "" {
-					log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
-				}
+		if !isScriptingOutput && stateFilePath == "" {
+			log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
+			if config.VlanID > 0 {
+				log.Printf("Usando VLAN tag: %d", config.VlanID)
 			}
+			log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
+			if arpSPA != "" {
+				log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
+			} else {
+				log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
+			}
+			if arpSHA != "" {
+				log.Printf("Usando MAC de origen personalizada (SHA) para todos los paquetes: %s", finalArpSHA)
+			}
+			if ethSrcMAC != "" {
+				log.Printf("Usando MAC de origen de trama Ethernet personalizada para todos los paquetes: %s", finalEthSrcMAC)
+			}
+			if cmd.Flags().Changed("arpop") {
+				opCodeName := "Request"
+				if arpOpCode == 2 {
+					opCodeName = "Reply"
+				}
+				log.Printf("Usando código de operación ARP personalizado: %d (%s)", arpOpCode, opCodeName)
+			}
+			if ethDstMAC != "" {
+				log.Printf("Usando MAC de destino de trama Ethernet personalizada para todos los paquetes: %s", finalEthDstMAC)
+			}
+			if arpTHA != "" {
+				log.Printf("Usando MAC de destino ARP (THA) personalizada para todos los paquetes: %s", finalArpTHA)
+			}
+			if pcapSaveFile != "" {
+				log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
+			}
+		}
 
-			allResults := runScan(config, isScriptingOutput)
+		// <-- INICIO BLOQUE MODIFICADO: Lógica de ejecución -->
+		if diffMode {
+			runDiffMode(config, stateFilePath)
+			return
+		}
 
+		if isScriptingOutput || stateFilePath != "" {
+			// Para JSON, CSV, quiet, plain o --state-file, necesitamos recolectar todo primero.
+			allResults := runScanAndCollect(config, isScriptingOutput)
 			if stateFilePath != "" {
 				saveStateToFile(allResults, stateFilePath)
-				if formatFlags == 0 {
+				if formatFlags == 0 { // Si solo se quería guardar el estado, salimos.
 					return
 				}
 			}
-
 			printResults(allResults, isScriptingOutput)
-			if !isScriptingOutput {
-				log.Println("Escaneo completado.")
-			}
-		} else { // Modo --diff
-			runDiffMode(config, stateFilePath, isScriptingOutput)
+		} else {
+			// Para el modo interactivo por defecto, procesamos en tiempo real.
+			runScanAndPrintRealTime(config)
 		}
+
+		if !isScriptingOutput && stateFilePath == "" {
+			log.Println("Escaneo completado.")
+		}
+		// <-- FIN BLOQUE MODIFICADO -->
 	},
 }
 
-func runScan(config *scanner.Config, isScriptingOutput bool) AnalyzedResults {
+// <-- INICIO BLOQUE MODIFICADO: Nueva función para el modo interactivo -->
+func runScanAndPrintRealTime(config *scanner.Config) {
+	var f formatter.Formatter
+	if plain {
+		f = formatter.NewPlainFormatter(showRTT)
+	} else {
+		f = formatter.NewDefaultFormatter(showRTT)
+	}
+
+	var bar *progressbar.ProgressBar
+	if showProgress {
+		bar = progressbar.NewOptions(
+			len(config.IPs)*config.Retry,
+			progressbar.OptionSetWriter(os.Stderr),
+			progressbar.OptionShowCount(),
+			progressbar.OptionSetWidth(30),
+			progressbar.OptionSpinnerType(14),
+			progressbar.OptionFullWidth(),
+		)
+		config.ProgressBar = bar
+	}
+
+	resultsChan, err := scanner.StartScan(config)
+	if err != nil {
+		log.Fatalf("Error iniciando el escaneo: %v", err)
+	}
+
+	f.PrintHeader()
+
+	// Analizamos y imprimimos sobre la marcha
+	summaries := processResults(resultsChan, ignoreDups, verboseCount, f.PrintResult)
+
+	if bar != nil {
+		_ = bar.Finish()
+	}
+
+	f.PrintFooter(summaries.ConflictSummaries, summaries.MultiIPSummaries)
+}
+// <-- FIN BLOQUE MODIFICADO -->
+
+// <-- INICIO BLOQUE MODIFICADO: Renombrada y ajustada la función de recolección -->
+func runScanAndCollect(config *scanner.Config, isScriptingOutput bool) AnalyzedResults {
 	var bar *progressbar.ProgressBar
 	shouldShowProgressBar := showProgress && !isScriptingOutput
 
@@ -384,21 +477,30 @@ func runScan(config *scanner.Config, isScriptingOutput bool) AnalyzedResults {
 		log.Fatalf("Error iniciando el escaneo: %v", err)
 	}
 
-	allResults := collectAndAnalyzeResults(resultsChan, ignoreDups, isScriptingOutput)
+	var allResults []scanner.ScanResult
+	// Aquí, el callback simplemente añade el resultado a la lista.
+	summaries := processResults(resultsChan, ignoreDups, verboseCount, func(result scanner.ScanResult) {
+		allResults = append(allResults, result)
+	})
 
 	if bar != nil {
-		_ = bar.Finish() // Nos aseguramos de que la barra siempre se cierre.
+		_ = bar.Finish()
 	}
 
-	return allResults
+	return AnalyzedResults{
+		Results:           allResults,
+		ConflictSummaries: summaries.ConflictSummaries,
+		MultiIPSummaries:  summaries.MultiIPSummaries,
+	}
 }
+// <-- FIN BLOQUE MODIFICADO -->
 
 type hostInfo struct {
 	MAC    string
 	Vendor string
 }
 
-func runDiffMode(config *scanner.Config, stateFile string, isScriptingOutput bool) {
+func runDiffMode(config *scanner.Config, stateFile string) {
 	log.Printf("Modo DIFF: Comparando el escaneo actual con el estado de '%s'", stateFile)
 
 	stateContent, err := os.ReadFile(stateFile)
@@ -417,7 +519,7 @@ func runDiffMode(config *scanner.Config, stateFile string, isScriptingOutput boo
 	}
 
 	log.Printf("Iniciando nuevo escaneo para la comparación...")
-	allNewResults := runScan(config, isScriptingOutput)
+	allNewResults := runScanAndCollect(config, false) // isScriptingOutput es false aquí
 
 	newStateMap := make(map[string]hostInfo)
 	for _, res := range allNewResults.Results {
@@ -463,8 +565,14 @@ type AnalyzedResults struct {
 	MultiIPSummaries  []string
 }
 
-func collectAndAnalyzeResults(resultsChan <-chan scanner.ScanResult, ignoreDups, isScriptingOutput bool) AnalyzedResults {
-	var allResults []scanner.ScanResult
+// <-- INICIO BLOQUE MODIFICADO: La función de análisis ahora es genérica -->
+type analysisSummaries struct {
+	ConflictSummaries []string
+	MultiIPSummaries  []string
+}
+
+// processResults procesa los resultados de un canal, realiza el análisis y ejecuta un callback por cada resultado válido.
+func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verboseCount int, resultCallback func(scanner.ScanResult)) analysisSummaries {
 	seenIPs := make(map[string]string)
 	seenMACs := make(map[string][]string)
 	var conflictSummaries []string
@@ -472,7 +580,7 @@ func collectAndAnalyzeResults(resultsChan <-chan scanner.ScanResult, ignoreDups,
 	for result := range resultsChan {
 		if previousMAC, found := seenIPs[result.IP]; found {
 			if ignoreDups {
-				if !isScriptingOutput && verboseCount >= 1 {
+				if verboseCount >= 1 {
 					log.Printf("Respuesta duplicada/conflicto para %s (%s) ignorada.", result.IP, result.MAC)
 				}
 				continue
@@ -502,7 +610,8 @@ func collectAndAnalyzeResults(resultsChan <-chan scanner.ScanResult, ignoreDups,
 				result.Status = "(Multi-IP)"
 			}
 		}
-		allResults = append(allResults, result)
+
+		resultCallback(result)
 	}
 
 	var multiIPSummaries []string
@@ -512,12 +621,13 @@ func collectAndAnalyzeResults(resultsChan <-chan scanner.ScanResult, ignoreDups,
 			multiIPSummaries = append(multiIPSummaries, summary)
 		}
 	}
-	return AnalyzedResults{
-		Results:           allResults,
+
+	return analysisSummaries{
 		ConflictSummaries: conflictSummaries,
 		MultiIPSummaries:  multiIPSummaries,
 	}
 }
+// <-- FIN BLOQUE MODIFICADO -->
 
 func printResults(analyzed AnalyzedResults, isScriptingOutput bool) {
 	var f formatter.Formatter
@@ -589,10 +699,12 @@ func init() {
 	rootCmd.Flags().StringVarP(&bandwidth, "bandwidth", "B", "", "Establece el ancho de banda de salida deseado a <x> (e.g., 1M, 256k).\nEl valor es en bits/segundo. Soporta sufijos K, M, G (decimales).\nNo se puede usar junto con --interval.")
 	rootCmd.Flags().Float64VarP(&backoffFactor, "backoff", "b", 1.5, "Establece el factor de backoff del timeout a <f>.\nEl timeout por host se multiplica por este factor después de cada reintento.")
 
-	rootCmd.Flags().StringVar(&arpSPA, "arpspa", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred.")
-	// <-- INICIO BLOQUE MODIFICADO: Añadir el flag --arpsha -->
+	rootCmd.Flags().StringVarP(&arpSPA, "arpspa", "s", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred.")
 	rootCmd.Flags().StringVarP(&arpSHA, "arpsha", "u", "", "Usa <m> como la dirección MAC de origen en los paquetes ARP (SHA).\nPor defecto, se utiliza la MAC de la interfaz de salida.")
-	// <-- FIN BLOQUE MODIFICADO -->
+	rootCmd.Flags().StringVarP(&ethSrcMAC, "srcaddr", "S", "", "Usa <m> como la dirección MAC de origen de la trama Ethernet.\nPor defecto, se utiliza la MAC de la interfaz de salida.")
+	rootCmd.Flags().IntVarP(&arpOpCode, "arpop", "o", 1, "Especifica el código de operación ARP <i>.\n1=Request (por defecto), 2=Reply.")
+	rootCmd.Flags().StringVarP(&ethDstMAC, "destaddr", "T", "", "Usa <m> como la dirección MAC de destino de la trama Ethernet.\nPor defecto, se usa la dirección de broadcast (ff:ff:ff:ff:ff:ff).")
+	rootCmd.Flags().StringVarP(&arpTHA, "arptha", "w", "", "Usa <m> como la dirección MAC de destino en el paquete ARP (THA).\nPor defecto, se usa una dirección cero (00:00:00:00:00:00).")
 
 	rootCmd.Flags().StringVarP(&ouiFilePath, "ouifile", "O", "", "Usa el fichero de mapeo OUI de IEEE a vendor <s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
 	rootCmd.Flags().StringVar(&iabFilePath, "iabfile", "", "Usa el fichero de mapeo IAB de IEEE a vendor <a>.\nPor defecto, se busca 'iab.txt' y se descarga si no existe.")
@@ -603,7 +715,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Muestra la salida completa en formato JSON.")
 	rootCmd.Flags().BoolVar(&csvOutput, "csv", false, "Muestra la salida en formato CSV (Comma-Separated Values).")
 
-	rootCmd.Flags().StringVar(&stateFilePath, "state-file", "", "Guarda los resultados del escaneo en un fichero de estado JSON <s>.\nSi se usa sin --diff, suprime la salida estándar.")
+	rootCmd.Flags().StringVar(&stateFilePath, "state-file", "", "Guarda los resultados del escaneo en un fichero de estado JSON s>.\nSi se usa sin --diff, suprime la salida estándar.")
 	rootCmd.Flags().BoolVar(&diffMode, "diff", false, "Compara un nuevo escaneo con el fichero de estado especificado en --state-file\ny muestra las diferencias (hosts añadidos, eliminados o modificados).")
 
 	rootCmd.Flags().BoolVar(&showProgress, "progress", false, "Muestra una barra de progreso durante el escaneo.")

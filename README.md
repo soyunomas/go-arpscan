@@ -120,8 +120,12 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | | `--interval` | `duration` | Intervalo mínimo entre el envío de paquetes. | `1ms` |
 | `-B` | `--bandwidth` | `string` | Ancho de banda de salida deseado (e.g., `1M`, `256k`). | `""` |
 | `-b` | `--backoff` | `float` | Factor por el que se multiplica el timeout en cada reintento. | `1.5` |
-| | `--arpspa` | `string` | Dirección IP de origen a usar en los paquetes ARP. | IP de la interfaz |
-| **`-u`** | **`--arpsha`** | **`string`** | **Dirección MAC de origen a usar en el paquete ARP (SHA).** | **MAC de la interfaz** |
+| `-s` | `--arpspa` | `string` | Dirección IP de origen a usar en los paquetes ARP. | IP de la interfaz |
+| `-u` | `--arpsha` | `string` | Dirección MAC de origen a usar en el paquete ARP (SHA). | MAC de la interfaz |
+| `-S` | `--srcaddr` | `string` | Dirección MAC de origen a usar en la trama Ethernet. | MAC de la interfaz |
+| `-T` | `--destaddr` | `string` | Dirección MAC de destino a usar en la trama Ethernet. | Broadcast |
+| `-w` | `--arptha` | `string` | Dirección MAC de destino a usar en el paquete ARP (THA). | Cero (`00:..:00`) |
+| `-o` | `--arpop` | `int` | Código de operación ARP (1=Request, 2=Reply). | `1` |
 | `-O` | `--ouifile` | `string` | Fichero de mapeo OUI personalizado. | `oui.txt` |
 | | `--iabfile` | `string` | Fichero de mapeo IAB personalizado. | `iab.txt` |
 | | `--macfile` | `string` | Fichero de mapeo MAC personalizado. | `""` |
@@ -178,18 +182,18 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | Fichero OUI | `--ouifile=<s>`, `-O <s>` | `--ouifile=<s>`, `-O <s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente si no existe. |
 | Fichero IAB | `--iabfile=<s>` | `--iabfile=<s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente. |
 | Fichero MAC Personalizado | `--macfile=<s>` | `--macfile=<s>` | ✅ **Implementado**. |
-| IP de Origen ARP (SPA) | `--arpspa=<a>`, `-s <a>` | `--arpspa=<a>` | ✅ **Implementado**. |
+| IP de Origen ARP (SPA) | `--arpspa=<a>`, `-s <a>` | `--arpspa=<a>`, `-s <a>` | ✅ **Implementado**. |
 | Longitud de Captura (snap) | `--snap=<i>`, `-n <i>` | `--snap=<i>`, `-n <i>` | ✅ **Implementado**. |
 | VLAN Tagging | `--vlan=<i>`, `-Q <i>` | `--vlan=<i>`, `-Q <i>` | ✅ **Implementado**. |
-| MAC Origen Ethernet | `--srcaddr=<m>`, `-S <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
-| MAC Destino Ethernet | `--destaddr=<m>`, `-T <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
-| MAC Origen ARP (SHA) | `--arpsha=<m>`, `-u <m>` | **`--arpsha=<m>`, `-u <m>`** | ✅ **Implementado**. |
-| MAC Destino ARP (THA) | `--arptha=<m>`, `-w <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| MAC Origen Ethernet | `--srcaddr=<m>`, `-S <m>` | `--srcaddr=<m>`, `-S <m>` | ✅ **Implementado**. |
+| MAC Destino Ethernet | `--destaddr=<m>`, `-T <m>` | `--destaddr=<m>`, `-T <m>` | ✅ **Implementado**. |
+| MAC Origen ARP (SHA) | `--arpsha=<m>`, `-u <m>` | `--arpsha=<m>`, `-u <m>` | ✅ **Implementado**. |
+| MAC Destino ARP (THA) | `--arptha=<m>`, `-w <m>` | `--arptha=<m>`, `-w <m>` | ✅ **Implementado**. |
+| Operación ARP (Opcode) | `--arpop=<i>`, `-o <i>` | `--arpop=<i>`, `-o <i>` | ✅ **Implementado**. |
 | Tipo de Protocolo Ethernet | `--prototype=<i>`, `-y <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | Tipo Hardware ARP | `--arphrd=<i>`, `-H <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | Tipo Protocolo ARP | `--arppro=<i>`, `-p <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | Longitud HW/Proto ARP | `--arphln`, `--arppln` | *(Aún no disponible)* | 🔲 No Implementado. |
-| Operación ARP (Opcode) | `--arpop=<i>`, `-o <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | Relleno (Padding) | `--padding=<h>`, `-A <h>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | Framing LLC | `--llc`, `-L` | *(Aún no disponible)* | 🔲 No Implementado. |
 
@@ -235,21 +239,23 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 
 **Paso 3.1: Opciones de Red Esenciales (Alto Impacto)**
 *   [✅] `--vlan=<i>`, `-Q <i>`: Esencial para escanear redes corporativas segmentadas.
-*   [✅] `--snap=<i>`, `-n <i>`: Controlar el `snaplen`. Complemento crucial para `--pcapsavefile`, ya que determina la longitud de captura del paquete.
+*   [✅] `--snap=<i>`, `-n <i>`: Controlar el `snaplen`. Complemento crucial para `--pcapsavefile`.
 
 **Paso 3.2: Spoofing y Manipulación ARP (Impacto Medio)**
-*   [🔲] `--srcaddr=<m>`, `-S <m>`: Modificar la MAC de origen de la trama Ethernet.
+*   [✅] `--srcaddr=<m>`, `-S <m>`: Modificar la MAC de origen de la trama Ethernet.
 *   [✅] `--arpsha=<m>`, `-u <m>`: Modificar la MAC de origen dentro del paquete ARP.
-*   [🔲] `--arpop=<i>`, `-o <i>`: Cambiar el código de operación ARP (Request/Reply).
+*   [✅] `--arpop=<i>`, `-o <i>`: Cambiar el código de operación ARP (Request/Reply).
 *   [🔲] `--arpspa=dest`: Añadir el soporte para el valor especial `"dest"` en la IP de origen.
 
 **Paso 3.3: Paridad Completa y Opciones de Nicho (Bajo Impacto)**
-*   [🔲] **Manipulación de Trama Ethernet**: `--destaddr=<m>`, `--prototype=<i>`.
-*   [🔲] **Manipulación de Campos ARP**: `--arptha`, `--arphrd`, `--arppro`, `--arphln`, `--arppln`.
+*   [✅] **Manipulación de Trama Ethernet (Destino)**: `--destaddr=<m>, -T <m>`.
+*   [✅] **Manipulación de Campos ARP (Destino)**: `--arptha=<m>, -w <m>`.
+*   [🔲] **Manipulación de Trama Ethernet (Protocolo)**: `--prototype=<i>`.
+*   [🔲] **Manipulación de Campos ARP (Otros)**: `--arphrd`, `--arppro`, `--arphln`, `--arppln`.
 *   [🔲] **Framing y Datos Adicionales**: `--padding=<h>`, `--llc`.
 
 **Paso 3.4: Paridad de Aliases (Calidad de Vida)**
-*   [🔲] Añadir el alias `-s` para `--arpspa`.
+*   [✅] Añadir el alias `-s` para `--arpspa`.
 
 ### ✅ Fase 4: Integración con el Ecosistema Moderno (COMPLETADO)
 
