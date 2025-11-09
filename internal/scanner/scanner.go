@@ -37,6 +37,7 @@ type Config struct {
 	Interval      time.Duration
 	BackoffFactor float64
 	ArpSPA        net.IP
+	ArpSHA        net.HardwareAddr // <-- NUEVO CAMPO
 	Verbosity     int
 	PcapSaveFile  string
 	VlanID        uint16
@@ -53,12 +54,10 @@ const (
 )
 
 type Target struct {
-	IP             net.IP
-	Status         targetStatus
-	SentCount      int
-	LastSent       time.Time
-	currentTimeout time.Duration
-	mu             sync.Mutex
+	IP       net.IP
+	Status   targetStatus
+	LastSent time.Time
+	mu       sync.Mutex
 }
 
 const (
@@ -106,12 +105,14 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		}
 
 		targets := make(map[string]*Target)
-		for _, ip := range cfg.IPs {
-			targets[ip.String()] = &Target{
-				IP:             ip,
-				Status:         StatusPending,
-				currentTimeout: cfg.HostTimeout,
+		targetList := make([]*Target, len(cfg.IPs))
+		for i, ip := range cfg.IPs {
+			t := &Target{
+				IP:     ip,
+				Status: StatusPending,
 			}
+			targets[ip.String()] = t
+			targetList[i] = t
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.ScanTimeout)
@@ -136,62 +137,53 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		ticker := time.NewTicker(cfg.Interval)
 		defer ticker.Stop()
 
-		passCounter := 0
-
-		if cfg.ProgressBar != nil {
-			if cfg.Retry > 1 {
-				cfg.ProgressBar.Describe(fmt.Sprintf("Pase 1/%d: Sondeando...", cfg.Retry))
-			} else {
-				cfg.ProgressBar.Describe("Sondeando...")
-			}
-		}
-
 	main_loop:
-		for {
-			select {
-			case <-ctx.Done():
-				break main_loop
-			case <-ticker.C:
-				now := time.Now()
-				targetToSend := findNextTarget(targets, now, cfg.Retry)
+		for pass := 0; pass < cfg.Retry; pass++ {
+			if cfg.ProgressBar != nil {
+				if cfg.Retry > 1 {
+					cfg.ProgressBar.Describe(fmt.Sprintf("Pase %d/%d: Sondeando...", pass+1, cfg.Retry))
+				} else {
+					cfg.ProgressBar.Describe("Sondeando...")
+				}
+			}
 
-				if targetToSend == nil {
-					if allTargetsDone(targets, cfg.Retry) {
-						break main_loop
-					}
+			for _, t := range targetList {
+				t.mu.Lock()
+				status := t.Status
+				t.mu.Unlock()
+
+				if status == StatusReplied {
 					continue
 				}
 
-				// <-- INICIO BLOQUE MODIFICADO: Lógica de cambio de pasada corregida -->
-				// targetToSend.SentCount es el número de envíos ya realizados (0 para la primera pasada).
-				// Si el número de envíos de este target es mayor que nuestro contador de pasadas actual,
-				// significa que estamos empezando una nueva pasada.
-				if targetToSend.SentCount > passCounter {
-					if cfg.Verbosity >= 1 {
-						// La pasada que acaba de terminar es passCounter + 1
-						log.Printf("Fin de la pasada %d. Hosts restantes: %d", passCounter+1, countRemainingTargets(targets))
-					}
-					// Actualizamos nuestro contador a la pasada actual
-					passCounter = targetToSend.SentCount
-					if cfg.ProgressBar != nil {
-						// La nueva pasada que empieza es passCounter + 1
-						cfg.ProgressBar.Describe(fmt.Sprintf("Pase %d/%d: Reintentando...", passCounter+1, cfg.Retry))
-					}
-				}
-				// <-- FIN BLOQUE MODIFICADO -->
-
-				targetToSend.mu.Lock()
-				targetToSend.Status = StatusSent
-				targetToSend.SentCount++
-				targetToSend.LastSent = now
-				targetToSend.currentTimeout = time.Duration(float64(targetToSend.currentTimeout) * cfg.BackoffFactor)
-				targetToSend.mu.Unlock()
-
 				select {
-				case jobs <- targetToSend.IP:
+				case <-ticker.C:
+					t.mu.Lock()
+					t.Status = StatusSent
+					t.LastSent = time.Now()
+					t.mu.Unlock()
+
+					select {
+					case jobs <- t.IP:
+					case <-ctx.Done():
+						break main_loop
+					}
 				case <-ctx.Done():
 					break main_loop
 				}
+			}
+			if cfg.Verbosity >= 1 {
+				log.Printf("Fin de la pasada %d. Hosts restantes: %d", pass+1, countRemainingTargets(targets))
+			}
+
+			currentHostTimeout := float64(cfg.HostTimeout)
+			for i := 0; i < pass; i++ {
+				currentHostTimeout *= cfg.BackoffFactor
+			}
+			time.Sleep(time.Duration(currentHostTimeout))
+
+			if countRemainingTargets(targets) == 0 {
+				break main_loop
 			}
 		}
 
@@ -275,52 +267,15 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 			if cfg.Verbosity >= 2 {
 				log.Printf("Enviando ARP a %s desde %s", dstIPv4, sourceIP)
 			}
-			sendARP(handle, cfg.Interface, sourceIP, dstIPv4, cfg.VlanID)
+			// <-- INICIO BLOQUE MODIFICADO: Pasar ArpSHA a sendARP -->
+			sendARP(handle, cfg.Interface, sourceIP, dstIPv4, cfg.VlanID, cfg.ArpSHA)
+			// <-- FIN BLOQUE MODIFICADO -->
 
 			if cfg.ProgressBar != nil {
 				cfg.ProgressBar.Add(1)
 			}
 		}
 	}
-}
-
-func allTargetsDone(targets map[string]*Target, maxRetries int) bool {
-	for _, t := range targets {
-		t.mu.Lock()
-		status := t.Status
-		sentCount := t.SentCount
-		t.mu.Unlock()
-
-		if status != StatusReplied && sentCount < maxRetries {
-			return false
-		}
-	}
-	return true
-}
-
-func findNextTarget(targets map[string]*Target, now time.Time, maxRetries int) *Target {
-	for _, t := range targets {
-		t.mu.Lock()
-		status := t.Status
-		t.mu.Unlock()
-
-		if status == StatusPending {
-			return t
-		}
-	}
-	for _, t := range targets {
-		t.mu.Lock()
-		status := t.Status
-		sentCount := t.SentCount
-		lastSent := t.LastSent
-		timeout := t.currentTimeout
-		t.mu.Unlock()
-
-		if status == StatusSent && sentCount < maxRetries && now.After(lastSent.Add(timeout)) {
-			return t
-		}
-	}
-	return nil
 }
 
 func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[string]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer) {
@@ -379,28 +334,37 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 
 			if target.Status != StatusReplied {
 				target.Status = StatusReplied
+				target.mu.Unlock()
+
 				if cfg.Verbosity >= 2 {
-					log.Printf("Primera respuesta de %s. Eliminando de la lista de pendientes de reintento.", srcIPStr)
+					log.Printf("Primera respuesta de %s. Marcado como respondido.", srcIPStr)
 				}
-			}
-			target.mu.Unlock()
-
-			vendor := cfg.VendorDB.Lookup(srcMACStr)
-
-			results <- ScanResult{
-				IP:     srcIPStr,
-				MAC:    srcMACStr,
-				RTT:    rtt,
-				Vendor: vendor,
+				vendor := cfg.VendorDB.Lookup(srcMACStr)
+				results <- ScanResult{
+					IP:     srcIPStr,
+					MAC:    srcMACStr,
+					RTT:    rtt,
+					Vendor: vendor,
+				}
+			} else {
+				target.mu.Unlock()
 			}
 		}
 	}
 }
 
-func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vlanID uint16) {
+// <-- INICIO BLOQUE MODIFICADO: Lógica para usar ArpSHA en la construcción del paquete -->
+func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vlanID uint16, arpSHA net.HardwareAddr) {
 	eth := layers.Ethernet{
 		SrcMAC: iface.HardwareAddr,
 		DstMAC: net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	}
+
+	var sourceHwAddress net.HardwareAddr
+	if arpSHA != nil {
+		sourceHwAddress = arpSHA
+	} else {
+		sourceHwAddress = iface.HardwareAddr
 	}
 
 	arp := layers.ARP{
@@ -409,11 +373,12 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, srcIP, dstIP net.IP, vla
 		HwAddressSize:     6,
 		ProtAddressSize:   4,
 		Operation:         layers.ARPRequest,
-		SourceHwAddress:   []byte(iface.HardwareAddr),
+		SourceHwAddress:   []byte(sourceHwAddress),
 		SourceProtAddress: []byte(srcIP.To4()),
 		DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
 		DstProtAddress:    []byte(dstIP.To4()),
 	}
+	// <-- FIN BLOQUE MODIFICADO -->
 
 	buf := gopacket.NewSerializeBuffer()
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}

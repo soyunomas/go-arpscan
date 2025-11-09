@@ -121,6 +121,7 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | `-B` | `--bandwidth` | `string` | Ancho de banda de salida deseado (e.g., `1M`, `256k`). | `""` |
 | `-b` | `--backoff` | `float` | Factor por el que se multiplica el timeout en cada reintento. | `1.5` |
 | | `--arpspa` | `string` | Dirección IP de origen a usar en los paquetes ARP. | IP de la interfaz |
+| **`-u`** | **`--arpsha`** | **`string`** | **Dirección MAC de origen a usar en el paquete ARP (SHA).** | **MAC de la interfaz** |
 | `-O` | `--ouifile` | `string` | Fichero de mapeo OUI personalizado. | `oui.txt` |
 | | `--iabfile` | `string` | Fichero de mapeo IAB personalizado. | `iab.txt` |
 | | `--macfile` | `string` | Fichero de mapeo MAC personalizado. | `""` |
@@ -182,7 +183,7 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | VLAN Tagging | `--vlan=<i>`, `-Q <i>` | `--vlan=<i>`, `-Q <i>` | ✅ **Implementado**. |
 | MAC Origen Ethernet | `--srcaddr=<m>`, `-S <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | MAC Destino Ethernet | `--destaddr=<m>`, `-T <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
-| MAC Origen ARP (SHA) | `--arpsha=<m>`, `-u <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
+| MAC Origen ARP (SHA) | `--arpsha=<m>`, `-u <m>` | **`--arpsha=<m>`, `-u <m>`** | ✅ **Implementado**. |
 | MAC Destino ARP (THA) | `--arptha=<m>`, `-w <m>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | Tipo de Protocolo Ethernet | `--prototype=<i>`, `-y <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
 | Tipo Hardware ARP | `--arphrd=<i>`, `-H <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
@@ -238,7 +239,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 
 **Paso 3.2: Spoofing y Manipulación ARP (Impacto Medio)**
 *   [🔲] `--srcaddr=<m>`, `-S <m>`: Modificar la MAC de origen de la trama Ethernet.
-*   [🔲] `--arpsha=<m>`, `-u <m>`: Modificar la MAC de origen dentro del paquete ARP.
+*   [✅] `--arpsha=<m>`, `-u <m>`: Modificar la MAC de origen dentro del paquete ARP.
 *   [🔲] `--arpop=<i>`, `-o <i>`: Cambiar el código de operación ARP (Request/Reply).
 *   [🔲] `--arpspa=dest`: Añadir el soporte para el valor especial `"dest"` en la IP de origen.
 

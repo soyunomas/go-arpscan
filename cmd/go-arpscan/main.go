@@ -44,6 +44,7 @@ var (
 	interval      time.Duration
 	backoffFactor float64
 	arpSPA        string
+	arpSHA        string // <-- NUEVO FLAG
 	quiet         bool
 	plain         bool
 	jsonOutput    bool
@@ -191,6 +192,16 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			}
 		}
 
+		// <-- INICIO BLOQUE MODIFICADO: Validar MAC de --arpsha -->
+		var finalArpSHA net.HardwareAddr
+		if arpSHA != "" {
+			finalArpSHA, err = net.ParseMAC(arpSHA)
+			if err != nil {
+				log.Fatalf("MAC de origen --arpsha inválida: %s. Error: %v", arpSHA, err)
+			}
+		}
+		// <-- FIN BLOQUE MODIFICADO -->
+
 		var targets []string
 		if useLocalnet {
 			if localnetCIDR == nil {
@@ -292,9 +303,7 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			log.Fatalf("Error cargando la base de datos de vendedores: %v", err)
 		}
 
-		var bar *progressbar.ProgressBar
 		isScriptingOutput := jsonOutput || csvOutput || plain || quiet
-		shouldShowProgressBar := showProgress && !isScriptingOutput
 
 		config := &scanner.Config{
 			Interface:     iface,
@@ -306,22 +315,11 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			Interval:      interval,
 			BackoffFactor: backoffFactor,
 			ArpSPA:        finalArpSPA,
+			ArpSHA:        finalArpSHA, // <-- NUEVO CAMPO EN CONFIG
 			Verbosity:     verboseCount,
 			PcapSaveFile:  pcapSaveFile,
 			VlanID:        uint16(vlanID),
 			Snaplen:       snaplen,
-		}
-
-		if shouldShowProgressBar {
-			bar = progressbar.NewOptions(
-				len(config.IPs)*config.Retry,
-				progressbar.OptionSetWriter(os.Stderr),
-				progressbar.OptionShowCount(),
-				progressbar.OptionSetWidth(30),
-				progressbar.OptionSpinnerType(14),
-				progressbar.OptionFullWidth(),
-			)
-			config.ProgressBar = bar
 		}
 
 		if !diffMode {
@@ -336,23 +334,17 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 				} else {
 					log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
 				}
+				// <-- INICIO BLOQUE MODIFICADO: Log para --arpsha -->
+				if arpSHA != "" {
+					log.Printf("Usando MAC de origen personalizada (SHA) para todos los paquetes: %s", finalArpSHA)
+				}
+				// <-- FIN BLOQUE MODIFICADO -->
 				if pcapSaveFile != "" {
 					log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
 				}
 			}
 
-			resultsChan, err := scanner.StartScan(config)
-			if err != nil {
-				log.Fatalf("Error iniciando el escaneo: %v", err)
-			}
-
-			allResults := collectAndAnalyzeResults(resultsChan, ignoreDups, isScriptingOutput)
-			
-			// <-- INICIO BLOQUE MODIFICADO: Finalizar la barra de progreso -->
-			if bar != nil {
-				_ = bar.Finish()
-			}
-			// <-- FIN BLOQUE MODIFICADO -->
+			allResults := runScan(config, isScriptingOutput)
 
 			if stateFilePath != "" {
 				saveStateToFile(allResults, stateFilePath)
@@ -366,9 +358,39 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 				log.Println("Escaneo completado.")
 			}
 		} else { // Modo --diff
-			runDiffMode(config, stateFilePath)
+			runDiffMode(config, stateFilePath, isScriptingOutput)
 		}
 	},
+}
+
+func runScan(config *scanner.Config, isScriptingOutput bool) AnalyzedResults {
+	var bar *progressbar.ProgressBar
+	shouldShowProgressBar := showProgress && !isScriptingOutput
+
+	if shouldShowProgressBar {
+		bar = progressbar.NewOptions(
+			len(config.IPs)*config.Retry,
+			progressbar.OptionSetWriter(os.Stderr),
+			progressbar.OptionShowCount(),
+			progressbar.OptionSetWidth(30),
+			progressbar.OptionSpinnerType(14),
+			progressbar.OptionFullWidth(),
+		)
+		config.ProgressBar = bar
+	}
+
+	resultsChan, err := scanner.StartScan(config)
+	if err != nil {
+		log.Fatalf("Error iniciando el escaneo: %v", err)
+	}
+
+	allResults := collectAndAnalyzeResults(resultsChan, ignoreDups, isScriptingOutput)
+
+	if bar != nil {
+		_ = bar.Finish() // Nos aseguramos de que la barra siempre se cierre.
+	}
+
+	return allResults
 }
 
 type hostInfo struct {
@@ -376,7 +398,7 @@ type hostInfo struct {
 	Vendor string
 }
 
-func runDiffMode(config *scanner.Config, stateFile string) {
+func runDiffMode(config *scanner.Config, stateFile string, isScriptingOutput bool) {
 	log.Printf("Modo DIFF: Comparando el escaneo actual con el estado de '%s'", stateFile)
 
 	stateContent, err := os.ReadFile(stateFile)
@@ -395,33 +417,7 @@ func runDiffMode(config *scanner.Config, stateFile string) {
 	}
 
 	log.Printf("Iniciando nuevo escaneo para la comparación...")
-	
-	// <-- INICIO BLOQUE MODIFICADO: Renombrar 'bar' para evitar solapamiento -->
-	var diffBar *progressbar.ProgressBar
-	if showProgress {
-		diffBar = progressbar.NewOptions(
-			len(config.IPs)*config.Retry,
-			progressbar.OptionSetWriter(os.Stderr),
-			progressbar.OptionShowCount(),
-			progressbar.OptionSetWidth(30),
-			progressbar.OptionSpinnerType(14),
-			progressbar.OptionFullWidth(),
-		)
-		config.ProgressBar = diffBar
-	}
-	// <-- FIN BLOQUE MODIFICADO -->
-
-	resultsChan, err := scanner.StartScan(config)
-	if err != nil {
-		log.Fatalf("Error iniciando el escaneo para diff: %v", err)
-	}
-	allNewResults := collectAndAnalyzeResults(resultsChan, false, true)
-	
-	// <-- INICIO BLOQUE MODIFICADO: Finalizar la barra de progreso en modo diff -->
-	if diffBar != nil {
-		_ = diffBar.Finish()
-	}
-	// <-- FIN BLOQUE MODIFICADO -->
+	allNewResults := runScan(config, isScriptingOutput)
 
 	newStateMap := make(map[string]hostInfo)
 	for _, res := range allNewResults.Results {
@@ -594,8 +590,11 @@ func init() {
 	rootCmd.Flags().Float64VarP(&backoffFactor, "backoff", "b", 1.5, "Establece el factor de backoff del timeout a <f>.\nEl timeout por host se multiplica por este factor después de cada reintento.")
 
 	rootCmd.Flags().StringVar(&arpSPA, "arpspa", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred.")
+	// <-- INICIO BLOQUE MODIFICADO: Añadir el flag --arpsha -->
+	rootCmd.Flags().StringVarP(&arpSHA, "arpsha", "u", "", "Usa <m> como la dirección MAC de origen en los paquetes ARP (SHA).\nPor defecto, se utiliza la MAC de la interfaz de salida.")
+	// <-- FIN BLOQUE MODIFICADO -->
 
-	rootCmd.Flags().StringVarP(&ouiFilePath, "ouifile", "O", "", "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
+	rootCmd.Flags().StringVarP(&ouiFilePath, "ouifile", "O", "", "Usa el fichero de mapeo OUI de IEEE a vendor <s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
 	rootCmd.Flags().StringVar(&iabFilePath, "iabfile", "", "Usa el fichero de mapeo IAB de IEEE a vendor <a>.\nPor defecto, se busca 'iab.txt' y se descarga si no existe.")
 	rootCmd.Flags().StringVar(&macFilePath, "macfile", "", "Usa el fichero personalizado de mapeo MAC/prefijo a vendor s>.")
 
@@ -609,7 +608,7 @@ func init() {
 
 	rootCmd.Flags().BoolVar(&showProgress, "progress", false, "Muestra una barra de progreso durante el escaneo.")
 	rootCmd.Flags().BoolVarP(&showRTT, "rtt", "D", false, "Muestra el tiempo de ida y vuelta (Round-Trip Time) del paquete.")
-	rootCmd.Flags().StringVarP(&pcapSaveFile, "pcapsavefile", "W", "", "Guarda las respuestas ARP en un fichero pcap s>.")
+	rootCmd.Flags().StringVarP(&pcapSaveFile, "pcapsavefile", "W", "", "Guarda las respuestas ARP en un fichero pcap <s>.")
 	rootCmd.Flags().BoolVarP(&ignoreDups, "ignoredups", "g", false, "No mostrar respuestas duplicadas.")
 	rootCmd.Flags().StringVar(&colorMode, "color", "auto", "Controla el uso de color en la salida (auto, on, off).")
 
