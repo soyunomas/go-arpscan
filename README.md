@@ -126,6 +126,13 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | `-T` | `--destaddr` | `string` | Dirección MAC de destino a usar en la trama Ethernet. | Broadcast |
 | `-w` | `--arptha` | `string` | Dirección MAC de destino a usar en el paquete ARP (THA). | Cero (`00:..:00`) |
 | `-o` | `--arpop` | `int` | Código de operación ARP (1=Request, 2=Reply). | `1` |
+| `-y` | `--prototype` | `string` | Establece el tipo de protocolo Ethernet (e.g., `0x0806`). | `0x0806` (ARP) |
+| `-H` | `--arphrd` | `int` | Establece el tipo de hardware ARP (ar$hrd). | `1` (Ethernet) |
+| `-p` | `--arppro` | `string` | Establece el tipo de protocolo ARP (ar$pro) (e.g., `0x0800`). | `0x0800` (IPv4) |
+| `-a` | `--arphln` | `int` | Establece la longitud de la dirección de hardware (ar$hln). | `6` |
+| `-P` | `--arppln` | `int` | Establece la longitud de la dirección de protocolo (ar$pln). | `4` |
+| `-A` | `--padding` | `string` | Añade datos de relleno (padding) en formato hexadecimal `<h>`. | `""` |
+| `-L` | `--llc` | `bool` | Usa framing RFC 1042 LLC con SNAP. | `false` |
 | `-O` | `--ouifile` | `string` | Fichero de mapeo OUI personalizado. | `oui.txt` |
 | | `--iabfile` | `string` | Fichero de mapeo IAB personalizado. | `iab.txt` |
 | | `--macfile` | `string` | Fichero de mapeo MAC personalizado. | `""` |
@@ -190,12 +197,12 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | MAC Origen ARP (SHA) | `--arpsha=<m>`, `-u <m>` | `--arpsha=<m>`, `-u <m>` | ✅ **Implementado**. |
 | MAC Destino ARP (THA) | `--arptha=<m>`, `-w <m>` | `--arptha=<m>`, `-w <m>` | ✅ **Implementado**. |
 | Operación ARP (Opcode) | `--arpop=<i>`, `-o <i>` | `--arpop=<i>`, `-o <i>` | ✅ **Implementado**. |
-| Tipo de Protocolo Ethernet | `--prototype=<i>`, `-y <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
-| Tipo Hardware ARP | `--arphrd=<i>`, `-H <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
-| Tipo Protocolo ARP | `--arppro=<i>`, `-p <i>` | *(Aún no disponible)* | 🔲 No Implementado. |
-| Longitud HW/Proto ARP | `--arphln`, `--arppln` | *(Aún no disponible)* | 🔲 No Implementado. |
-| Relleno (Padding) | `--padding=<h>`, `-A <h>` | *(Aún no disponible)* | 🔲 No Implementado. |
-| Framing LLC | `--llc`, `-L` | *(Aún no disponible)* | 🔲 No Implementado. |
+| Tipo de Protocolo Ethernet | `--prototype=<i>`, `-y <i>` | `--prototype=<i>`, `-y <i>` | ✅ **Implementado**. |
+| Tipo Hardware ARP | `--arphrd=<i>`, `-H <i>` | `--arphrd=<i>`, `-H <i>` | ✅ **Implementado**. |
+| Tipo Protocolo ARP | `--arppro=<i>`, `-p <i>` | `--arppro=<i>`, `-p <i>` | ✅ **Implementado**. |
+| Longitud HW/Proto ARP | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | ✅ **Implementado**. |
+| Relleno (Padding) | `--padding=<h>`, `-A <h>` | `--padding=<h>`, `-A <h>` | ✅ **Implementado**. |
+| Framing LLC | `--llc`, `-L` | `--llc`, `-L` | ✅ **Implementado**. |
 
 ## Hoja de Ruta
 
@@ -233,7 +240,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Ignorar Duplicados**: `--ignoredups (-g)`.
 *   [✅] **Modos de Salida para Scripting**: `--quiet (-q)` para IP/MAC y `--plain (-x)` para salida sin cabeceras/pies.
 
-### [🔲] Fase 3: Manipulación Avanzada de Paquetes (Paridad de "Power-User")
+### ✅ Fase 3: Manipulación Avanzada de Paquetes (Paridad de "Power-User") (COMPLETADO)
 
 *Objetivo: Implementar el arsenal completo de manipulación de paquetes de arp-scan para atraer a los usuarios avanzados, pentesters y administradores de red.*
 
@@ -245,14 +252,14 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] `--srcaddr=<m>`, `-S <m>`: Modificar la MAC de origen de la trama Ethernet.
 *   [✅] `--arpsha=<m>`, `-u <m>`: Modificar la MAC de origen dentro del paquete ARP.
 *   [✅] `--arpop=<i>`, `-o <i>`: Cambiar el código de operación ARP (Request/Reply).
-*   [🔲] `--arpspa=dest`: Añadir el soporte para el valor especial `"dest"` en la IP de origen.
+*   [✅] `--arpspa=dest`: Añadir el soporte para el valor especial `"dest"` en la IP de origen.
 
 **Paso 3.3: Paridad Completa y Opciones de Nicho (Bajo Impacto)**
 *   [✅] **Manipulación de Trama Ethernet (Destino)**: `--destaddr=<m>, -T <m>`.
 *   [✅] **Manipulación de Campos ARP (Destino)**: `--arptha=<m>, -w <m>`.
-*   [🔲] **Manipulación de Trama Ethernet (Protocolo)**: `--prototype=<i>`.
-*   [🔲] **Manipulación de Campos ARP (Otros)**: `--arphrd`, `--arppro`, `--arphln`, `--arppln`.
-*   [🔲] **Framing y Datos Adicionales**: `--padding=<h>`, `--llc`.
+*   [✅] **Manipulación de Trama Ethernet (Protocolo)**: `--prototype=<i>`, `-y <i>`.
+*   [✅] **Manipulación de Campos ARP (Otros)**: `--arphrd=<i> (-H)`, `--arppro=<i> (-p)`, `--arphln=<i> (-a)`, `--arppln=<i> (-P)`.
+*   [✅] **Framing y Datos Adicionales**: `--padding=<h> (-A)`, `--llc (-L)`.
 
 **Paso 3.4: Paridad de Aliases (Calidad de Vida)**
 *   [✅] Añadir el alias `-s` para `--arpspa`.
@@ -274,7 +281,6 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [🔲] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva (Gratuitous ARP) con sondeos activos periódicos.
     *   **Salida de Eventos**: Generar logs estructurados en JSON en tiempo real para eventos como `NEW_HOST`, `IP_CONFLICT` y `HOST_DISAPPEARED`.
     *   **Detección de ARP Spoofing**: Añadir heurísticas para detectar "MAC Flapping" (cambios rápidos de MAC para una misma IP) y alertar sobre posibles ataques.
-    *   **Envío a servidor mqtt**
 
 **Paso 5.2: Gestión de Estado y Control de Cambios**
 *   [✅] **Guardado de Estado (`--state-file`)**: Guardar los resultados de un escaneo en un fichero de estado (JSON) para su posterior análisis.

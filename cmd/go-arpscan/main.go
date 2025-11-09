@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go-arpscan/internal/formatter"
@@ -49,6 +50,13 @@ var (
 	arpOpCode     int
 	ethDstMAC     string
 	arpTHA        string
+	ethPrototype  string
+	arpHrd        int
+	arpPro        string
+	arpHln        int
+	arpPln        int
+	paddingHex    string
+	useLLC        bool // <-- NUEVO CAMPO
 	quiet         bool
 	plain         bool
 	jsonOutput    bool
@@ -189,10 +197,15 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 		}
 
 		var finalArpSPA net.IP
+		var useArpSPADest bool
 		if arpSPA != "" {
-			finalArpSPA = net.ParseIP(arpSPA)
-			if finalArpSPA == nil || finalArpSPA.To4() == nil {
-				log.Fatalf("IP de origen --arpspa inválida: %s", arpSPA)
+			if strings.ToLower(arpSPA) == "dest" {
+				useArpSPADest = true
+			} else {
+				finalArpSPA = net.ParseIP(arpSPA)
+				if finalArpSPA == nil || finalArpSPA.To4() == nil {
+					log.Fatalf("IP de origen --arpspa inválida: %s", arpSPA)
+				}
 			}
 		}
 
@@ -225,6 +238,36 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			finalArpTHA, err = net.ParseMAC(arpTHA)
 			if err != nil {
 				log.Fatalf("MAC de destino ARP --arptha inválida: %s. Error: %v", arpTHA, err)
+			}
+		}
+
+		var finalEthPrototype uint16 = 0x0806 // Default ARP EtherType
+		if cmd.Flags().Changed("prototype") {
+			val, err := strconv.ParseUint(strings.TrimPrefix(ethPrototype, "0x"), 16, 16)
+			if err != nil {
+				log.Fatalf("Valor de --prototype inválido: %s. Debe ser un número de 16-bit (e.g., 2054 o 0x0806). Error: %v", ethPrototype, err)
+			}
+			finalEthPrototype = uint16(val)
+		}
+
+		var finalArpPro uint16 = 0x0800 // Default IPv4 Protocol Type
+		if cmd.Flags().Changed("arppro") {
+			val, err := strconv.ParseUint(strings.TrimPrefix(arpPro, "0x"), 16, 16)
+			if err != nil {
+				log.Fatalf("Valor de --arppro inválido: %s. Debe ser un número de 16-bit (e.g., 2048 o 0x0800). Error: %v", arpPro, err)
+			}
+			finalArpPro = uint16(val)
+		}
+
+		finalArpHrd := uint16(arpHrd)
+		finalArpHln := uint8(arpHln)
+		finalArpPln := uint8(arpPln)
+
+		var finalPaddingData []byte
+		if cmd.Flags().Changed("padding") {
+			finalPaddingData, err = hex.DecodeString(paddingHex)
+			if err != nil {
+				log.Fatalf("Valor de --padding inválido: %s. Debe ser un string hexadecimal. Error: %v", paddingHex, err)
 			}
 		}
 
@@ -332,24 +375,32 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 		isScriptingOutput := jsonOutput || csvOutput || plain || quiet
 
 		config := &scanner.Config{
-			Interface:     iface,
-			IPs:           ips,
-			VendorDB:      vendorDB,
-			ScanTimeout:   scanTimeout,
-			HostTimeout:   hostTimeout,
-			Retry:         retry,
-			Interval:      interval,
-			BackoffFactor: backoffFactor,
-			ArpSPA:        finalArpSPA,
-			ArpSHA:        finalArpSHA,
-			EthSrcMAC:     finalEthSrcMAC,
-			ArpOpCode:     uint16(arpOpCode),
-			EthDstMAC:     finalEthDstMAC,
-			ArpTHA:        finalArpTHA,
-			Verbosity:     verboseCount,
-			PcapSaveFile:  pcapSaveFile,
-			VlanID:        uint16(vlanID),
-			Snaplen:       snaplen,
+			Interface:         iface,
+			IPs:               ips,
+			VendorDB:          vendorDB,
+			ScanTimeout:       scanTimeout,
+			HostTimeout:       hostTimeout,
+			Retry:             retry,
+			Interval:          interval,
+			BackoffFactor:     backoffFactor,
+			ArpSPA:            finalArpSPA,
+			ArpSPADest:        useArpSPADest,
+			ArpSHA:            finalArpSHA,
+			EthSrcMAC:         finalEthSrcMAC,
+			ArpOpCode:         uint16(arpOpCode),
+			EthDstMAC:         finalEthDstMAC,
+			ArpTHA:            finalArpTHA,
+			EthernetPrototype: finalEthPrototype,
+			ArpHardwareType:   finalArpHrd,
+			ArpProtocolType:   finalArpPro,
+			ArpHardwareLen:    finalArpHln,
+			ArpProtocolLen:    finalArpPln,
+			PaddingData:       finalPaddingData,
+			UseLLC:            useLLC, // <-- PASAR EL VALOR
+			Verbosity:         verboseCount,
+			PcapSaveFile:      pcapSaveFile,
+			VlanID:            uint16(vlanID),
+			Snaplen:           snaplen,
 		}
 
 		if !isScriptingOutput && stateFilePath == "" {
@@ -358,16 +409,23 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 				log.Printf("Usando VLAN tag: %d", config.VlanID)
 			}
 			log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
-			if arpSPA != "" {
+
+			if useArpSPADest {
+				log.Println("Usando IP de origen dinámica igual a la IP de destino (--arpspa=dest).")
+			} else if finalArpSPA != nil {
 				log.Printf("Usando IP de origen personalizada (SPA) para todos los paquetes: %s", finalArpSPA)
 			} else {
 				log.Println("Usando IP de origen dinámica para cada paquete (comportamiento por defecto).")
 			}
+
 			if arpSHA != "" {
 				log.Printf("Usando MAC de origen personalizada (SHA) para todos los paquetes: %s", finalArpSHA)
 			}
 			if ethSrcMAC != "" {
 				log.Printf("Usando MAC de origen de trama Ethernet personalizada para todos los paquetes: %s", finalEthSrcMAC)
+			}
+			if cmd.Flags().Changed("prototype") {
+				log.Printf("Usando tipo de protocolo Ethernet personalizado: 0x%04x (%d)", finalEthPrototype, finalEthPrototype)
 			}
 			if cmd.Flags().Changed("arpop") {
 				opCodeName := "Request"
@@ -382,40 +440,57 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			if arpTHA != "" {
 				log.Printf("Usando MAC de destino ARP (THA) personalizada para todos los paquetes: %s", finalArpTHA)
 			}
+			if cmd.Flags().Changed("arphrd") {
+				log.Printf("Usando tipo de hardware ARP personalizado (ar$hrd): %d", finalArpHrd)
+			}
+			if cmd.Flags().Changed("arppro") {
+				log.Printf("Usando tipo de protocolo ARP personalizado (ar$pro): 0x%04x (%d)", finalArpPro, finalArpPro)
+			}
+			if cmd.Flags().Changed("arphln") {
+				log.Printf("Usando longitud de dirección de hardware ARP personalizada (ar$hln): %d", finalArpHln)
+			}
+			if cmd.Flags().Changed("arppln") {
+				log.Printf("Usando longitud de dirección de protocolo ARP personalizada (ar$pln): %d", finalArpPln)
+			}
+			if cmd.Flags().Changed("padding") {
+				log.Printf("Añadiendo relleno personalizado al paquete: %s", paddingHex)
+			}
+			// <-- INICIO BLOQUE NUEVO: Mensaje de log para LLC -->
+			if useLLC {
+				log.Println("Usando framing RFC 1042 LLC/SNAP para los paquetes salientes.")
+			}
+			// <-- FIN BLOQUE NUEVO -->
 			if pcapSaveFile != "" {
 				log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
 			}
 		}
 
-		// <-- INICIO BLOQUE MODIFICADO: Lógica de ejecución -->
 		if diffMode {
 			runDiffMode(config, stateFilePath)
 			return
 		}
 
 		if isScriptingOutput || stateFilePath != "" {
-			// Para JSON, CSV, quiet, plain o --state-file, necesitamos recolectar todo primero.
 			allResults := runScanAndCollect(config, isScriptingOutput)
 			if stateFilePath != "" {
 				saveStateToFile(allResults, stateFilePath)
-				if formatFlags == 0 { // Si solo se quería guardar el estado, salimos.
+				if formatFlags == 0 {
 					return
 				}
 			}
 			printResults(allResults, isScriptingOutput)
 		} else {
-			// Para el modo interactivo por defecto, procesamos en tiempo real.
 			runScanAndPrintRealTime(config)
 		}
+
+
 
 		if !isScriptingOutput && stateFilePath == "" {
 			log.Println("Escaneo completado.")
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
 	},
 }
 
-// <-- INICIO BLOQUE MODIFICADO: Nueva función para el modo interactivo -->
 func runScanAndPrintRealTime(config *scanner.Config) {
 	var f formatter.Formatter
 	if plain {
@@ -444,7 +519,6 @@ func runScanAndPrintRealTime(config *scanner.Config) {
 
 	f.PrintHeader()
 
-	// Analizamos y imprimimos sobre la marcha
 	summaries := processResults(resultsChan, ignoreDups, verboseCount, f.PrintResult)
 
 	if bar != nil {
@@ -453,9 +527,7 @@ func runScanAndPrintRealTime(config *scanner.Config) {
 
 	f.PrintFooter(summaries.ConflictSummaries, summaries.MultiIPSummaries)
 }
-// <-- FIN BLOQUE MODIFICADO -->
 
-// <-- INICIO BLOQUE MODIFICADO: Renombrada y ajustada la función de recolección -->
 func runScanAndCollect(config *scanner.Config, isScriptingOutput bool) AnalyzedResults {
 	var bar *progressbar.ProgressBar
 	shouldShowProgressBar := showProgress && !isScriptingOutput
@@ -478,7 +550,6 @@ func runScanAndCollect(config *scanner.Config, isScriptingOutput bool) AnalyzedR
 	}
 
 	var allResults []scanner.ScanResult
-	// Aquí, el callback simplemente añade el resultado a la lista.
 	summaries := processResults(resultsChan, ignoreDups, verboseCount, func(result scanner.ScanResult) {
 		allResults = append(allResults, result)
 	})
@@ -493,7 +564,6 @@ func runScanAndCollect(config *scanner.Config, isScriptingOutput bool) AnalyzedR
 		MultiIPSummaries:  summaries.MultiIPSummaries,
 	}
 }
-// <-- FIN BLOQUE MODIFICADO -->
 
 type hostInfo struct {
 	MAC    string
@@ -565,13 +635,11 @@ type AnalyzedResults struct {
 	MultiIPSummaries  []string
 }
 
-// <-- INICIO BLOQUE MODIFICADO: La función de análisis ahora es genérica -->
 type analysisSummaries struct {
 	ConflictSummaries []string
 	MultiIPSummaries  []string
 }
 
-// processResults procesa los resultados de un canal, realiza el análisis y ejecuta un callback por cada resultado válido.
 func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verboseCount int, resultCallback func(scanner.ScanResult)) analysisSummaries {
 	seenIPs := make(map[string]string)
 	seenMACs := make(map[string][]string)
@@ -627,7 +695,6 @@ func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verb
 		MultiIPSummaries:  multiIPSummaries,
 	}
 }
-// <-- FIN BLOQUE MODIFICADO -->
 
 func printResults(analyzed AnalyzedResults, isScriptingOutput bool) {
 	var f formatter.Formatter
@@ -699,14 +766,25 @@ func init() {
 	rootCmd.Flags().StringVarP(&bandwidth, "bandwidth", "B", "", "Establece el ancho de banda de salida deseado a <x> (e.g., 1M, 256k).\nEl valor es en bits/segundo. Soporta sufijos K, M, G (decimales).\nNo se puede usar junto con --interval.")
 	rootCmd.Flags().Float64VarP(&backoffFactor, "backoff", "b", 1.5, "Establece el factor de backoff del timeout a <f>.\nEl timeout por host se multiplica por este factor después de cada reintento.")
 
-	rootCmd.Flags().StringVarP(&arpSPA, "arpspa", "s", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred.")
+	rootCmd.Flags().StringVarP(&arpSPA, "arpspa", "s", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred. Valor especial: \"dest\" para usar la IP de destino.")
 	rootCmd.Flags().StringVarP(&arpSHA, "arpsha", "u", "", "Usa <m> como la dirección MAC de origen en los paquetes ARP (SHA).\nPor defecto, se utiliza la MAC de la interfaz de salida.")
 	rootCmd.Flags().StringVarP(&ethSrcMAC, "srcaddr", "S", "", "Usa <m> como la dirección MAC de origen de la trama Ethernet.\nPor defecto, se utiliza la MAC de la interfaz de salida.")
 	rootCmd.Flags().IntVarP(&arpOpCode, "arpop", "o", 1, "Especifica el código de operación ARP <i>.\n1=Request (por defecto), 2=Reply.")
 	rootCmd.Flags().StringVarP(&ethDstMAC, "destaddr", "T", "", "Usa <m> como la dirección MAC de destino de la trama Ethernet.\nPor defecto, se usa la dirección de broadcast (ff:ff:ff:ff:ff:ff).")
 	rootCmd.Flags().StringVarP(&arpTHA, "arptha", "w", "", "Usa <m> como la dirección MAC de destino en el paquete ARP (THA).\nPor defecto, se usa una dirección cero (00:00:00:00:00:00).")
+	rootCmd.Flags().StringVarP(&ethPrototype, "prototype", "y", "", "Establece el tipo de protocolo Ethernet a <i> (e.g., 0x0806).\nPor defecto es 0x0806 (ARP).")
 
-	rootCmd.Flags().StringVarP(&ouiFilePath, "ouifile", "O", "", "Usa el fichero de mapeo OUI de IEEE a vendor <s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
+	rootCmd.Flags().IntVarP(&arpHrd, "arphrd", "H", 1, "Usa <i> para el tipo de hardware ARP (ar$hrd).\nEl valor normal es 1 (Ethernet).")
+	rootCmd.Flags().StringVarP(&arpPro, "arppro", "p", "", "Usa <i> para el tipo de protocolo ARP (ar$pro) (e.g., 0x0800).\nPor defecto es 0x0800 (IPv4).")
+	rootCmd.Flags().IntVarP(&arpHln, "arphln", "a", 6, "Establece la longitud de la dirección de hardware a <i> (ar$hln).\nPor defecto es 6 para Ethernet.")
+	rootCmd.Flags().IntVarP(&arpPln, "arppln", "P", 4, "Establece la longitud de la dirección de protocolo a <i> (ar$pln).\nPor defecto es 4 para IPv4.")
+
+	rootCmd.Flags().StringVarP(&paddingHex, "padding", "A", "", "Añade datos de relleno (padding) en formato hexadecimal <h> al final del paquete.")
+	// <-- INICIO BLOQUE NUEVO: Añadir flag de LLC -->
+	rootCmd.Flags().BoolVarP(&useLLC, "llc", "L", false, "Usa framing RFC 1042 LLC con SNAP.")
+	// <-- FIN BLOQUE NUEVO -->
+
+	rootCmd.Flags().StringVarP(&ouiFilePath, "ouifile", "O", "", "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
 	rootCmd.Flags().StringVar(&iabFilePath, "iabfile", "", "Usa el fichero de mapeo IAB de IEEE a vendor <a>.\nPor defecto, se busca 'iab.txt' y se descarga si no existe.")
 	rootCmd.Flags().StringVar(&macFilePath, "macfile", "", "Usa el fichero personalizado de mapeo MAC/prefijo a vendor s>.")
 

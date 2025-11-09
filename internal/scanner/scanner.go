@@ -28,25 +28,33 @@ type ScanResult struct {
 }
 
 type Config struct {
-	Interface     *net.Interface
-	IPs           []net.IP
-	VendorDB      *oui.VendorDB
-	ScanTimeout   time.Duration
-	HostTimeout   time.Duration
-	Retry         int
-	Interval      time.Duration
-	BackoffFactor float64
-	ArpSPA        net.IP
-	ArpSHA        net.HardwareAddr
-	EthSrcMAC     net.HardwareAddr
-	ArpOpCode     uint16
-	EthDstMAC     net.HardwareAddr // <-- NUEVO CAMPO
-	ArpTHA        net.HardwareAddr // <-- NUEVO CAMPO
-	Verbosity     int
-	PcapSaveFile  string
-	VlanID        uint16
-	Snaplen       int
-	ProgressBar   *progressbar.ProgressBar
+	Interface         *net.Interface
+	IPs               []net.IP
+	VendorDB          *oui.VendorDB
+	ScanTimeout       time.Duration
+	HostTimeout       time.Duration
+	Retry             int
+	Interval          time.Duration
+	BackoffFactor     float64
+	ArpSPA            net.IP
+	ArpSPADest        bool
+	ArpSHA            net.HardwareAddr
+	EthSrcMAC         net.HardwareAddr
+	ArpOpCode         uint16
+	EthDstMAC         net.HardwareAddr
+	ArpTHA            net.HardwareAddr
+	EthernetPrototype uint16
+	ArpHardwareType   uint16
+	ArpProtocolType   uint16
+	ArpHardwareLen    uint8
+	ArpProtocolLen    uint8
+	PaddingData       []byte
+	UseLLC            bool
+	Verbosity         int
+	PcapSaveFile      string
+	VlanID            uint16
+	Snaplen           int
+	ProgressBar       *progressbar.ProgressBar
 }
 
 type targetStatus int
@@ -248,7 +256,9 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 			}
 
 			var sourceIP net.IP
-			if cfg.ArpSPA != nil {
+			if cfg.ArpSPADest {
+				sourceIP = dstIPv4
+			} else if cfg.ArpSPA != nil {
 				sourceIP = cfg.ArpSPA.To4()
 			} else {
 				dstMask := dstIPv4.DefaultMask()
@@ -363,7 +373,6 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 		sourceEthMAC = iface.HardwareAddr
 	}
 
-	// <-- INICIO BLOQUE MODIFICADO: Usar cfg.EthDstMAC -->
 	var destinationEthMAC net.HardwareAddr
 	if cfg.EthDstMAC != nil {
 		destinationEthMAC = cfg.EthDstMAC
@@ -375,7 +384,6 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 		SrcMAC: sourceEthMAC,
 		DstMAC: destinationEthMAC,
 	}
-	// <-- FIN BLOQUE MODIFICADO -->
 
 	var sourceArpSHA net.HardwareAddr
 	if cfg.ArpSHA != nil {
@@ -384,7 +392,6 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 		sourceArpSHA = iface.HardwareAddr
 	}
 
-	// <-- INICIO BLOQUE MODIFICADO: Usar cfg.ArpTHA -->
 	var destinationArpTHA []byte
 	if cfg.ArpTHA != nil {
 		destinationArpTHA = []byte(cfg.ArpTHA)
@@ -393,33 +400,67 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 	}
 
 	arp := layers.ARP{
-		AddrType:          layers.LinkTypeEthernet,
-		Protocol:          layers.EthernetTypeIPv4,
-		HwAddressSize:     6,
-		ProtAddressSize:   4,
+		AddrType:          layers.LinkType(cfg.ArpHardwareType),
+		Protocol:          layers.EthernetType(cfg.ArpProtocolType),
+		HwAddressSize:     cfg.ArpHardwareLen,
+		ProtAddressSize:   cfg.ArpProtocolLen,
 		Operation:         cfg.ArpOpCode,
 		SourceHwAddress:   []byte(sourceArpSHA),
 		SourceProtAddress: []byte(srcIP.To4()),
 		DstHwAddress:      destinationArpTHA,
 		DstProtAddress:    []byte(dstIP.To4()),
 	}
-	// <-- FIN BLOQUE MODIFICADO -->
 
 	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true} // FixLengths a true es más seguro con LLC
 	var err error
 
-	if cfg.VlanID > 0 {
-		eth.EthernetType = layers.EthernetTypeDot1Q
-		dot1q := layers.Dot1Q{
-			VLANIdentifier: cfg.VlanID,
-			Type:           layers.EthernetTypeARP,
+	var layersToSerialize []gopacket.SerializableLayer
+
+	if cfg.UseLLC {
+		// Construir el paquete con framing IEEE 802.2 LLC/SNAP (RFC 1042)
+		llc := layers.LLC{
+			DSAP:    0xAA, // SNAP
+			SSAP:    0xAA, // SNAP
+			Control: 0x03, // Unnumbered Information
 		}
-		err = gopacket.SerializeLayers(buf, opts, &eth, &dot1q, &arp)
+		// <-- CORRECCIÓN: El nombre del campo es OrganizationalCode, no OUI. -->
+		snap := layers.SNAP{
+			OrganizationalCode: []byte{0x00, 0x00, 0x00}, // Encapsulated Ethernet OUI
+			Type:               layers.EthernetType(cfg.EthernetPrototype),
+		}
+
+		if cfg.VlanID > 0 {
+			eth.EthernetType = layers.EthernetTypeDot1Q
+			dot1q := layers.Dot1Q{
+				VLANIdentifier: cfg.VlanID,
+				// gopacket calculará el Type como la longitud del payload LLC/SNAP/ARP
+			}
+			layersToSerialize = append(layersToSerialize, &eth, &dot1q, &llc, &snap, &arp)
+		} else {
+			// gopacket calculará el EthernetType como la longitud del payload LLC/SNAP/ARP
+			layersToSerialize = append(layersToSerialize, &eth, &llc, &snap, &arp)
+		}
 	} else {
-		eth.EthernetType = layers.EthernetTypeARP
-		err = gopacket.SerializeLayers(buf, opts, &eth, &arp)
+		// Lógica original para framing Ethernet-II
+		if cfg.VlanID > 0 {
+			eth.EthernetType = layers.EthernetTypeDot1Q
+			dot1q := layers.Dot1Q{
+				VLANIdentifier: cfg.VlanID,
+				Type:           layers.EthernetType(cfg.EthernetPrototype),
+			}
+			layersToSerialize = append(layersToSerialize, &eth, &dot1q, &arp)
+		} else {
+			eth.EthernetType = layers.EthernetType(cfg.EthernetPrototype)
+			layersToSerialize = append(layersToSerialize, &eth, &arp)
+		}
 	}
+
+	if len(cfg.PaddingData) > 0 {
+		layersToSerialize = append(layersToSerialize, gopacket.Payload(cfg.PaddingData))
+	}
+
+	err = gopacket.SerializeLayers(buf, opts, layersToSerialize...)
 
 	if err != nil {
 		log.Printf("Error serializando paquete para %s: %v", dstIP, err)
