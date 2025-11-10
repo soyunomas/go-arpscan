@@ -324,44 +324,42 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 
 **Paso 6.3: Evasión y Mimetismo Táctico: Perfiles de Fingerprint**
 *   [🔲] **Implementación de Perfiles (`--profile <nombre>`)**: Añadir la capacidad de cargar conjuntos de parámetros predefinidos desde un fichero de configuración (`profiles.yaml`). Esta característica encapsula tácticas complejas en un solo flag, permitiendo automatizar el engaño y la evasión. A continuación se detallan los perfiles iniciales que se implementarían:
-
     *   **Perfil: `windows11-workstation` (Mimetismo)**
-        *   **Objetivo**: Camuflarse como el tipo de tráfico más común en redes corporativas.
-        *   **Técnica**: Envía paquetes ARP con 18 bytes de relleno nulo, imitando el comportamiento por defecto de la pila de red de Windows. Utiliza OUI de fabricantes como Dell o Lenovo.
-
     *   **Perfil: `macos-ventura` (Mimetismo)**
-        *   **Objetivo**: Mezclarse en entornos de desarrollo, diseño o entre equipos ejecutivos.
-        *   **Técnica**: Envía paquetes ARP estándar sin relleno, utilizando un OUI de `Apple, Inc.` para la dirección MAC de origen.
-
     *   **Perfil: `hp-officejet-printer` (Engaño)**
-        *   **Objetivo**: Lanzar un escaneo desde la identidad de un dispositivo de baja sospecha en el que se confía implícitamente y que rara vez se monitoriza.
-        *   **Técnica**: Utiliza un OUI de `Hewlett-Packard` y timeouts ligeramente más largos para simular el hardware de red de una impresora.
-
     *   **Perfil: `stealth-scan-generic` (Táctica)**
-        *   **Objetivo**: Realizar un reconocimiento de máximo sigilo en una red desconocida, minimizando la probabilidad de activar umbrales de alerta en un IDS/IPS.
-        *   **Técnica**: Combina un orden de escaneo aleatorio (`--random`), un ancho de banda extremadamente bajo (`--bandwidth 32k`), y una MAC de origen aleatoria generada a partir de un OUI conocido en cada ejecución.
-
     *   **Perfil: `ids-stress-test` (Prueba de Defensas)**
-        *   **Objetivo**: Ayudar a los equipos de defensa (Blue Team) a verificar la efectividad de sus reglas de detección.
-        *   **Técnica**: Envía paquetes deliberadamente anómalos (ej. con un tipo de hardware incorrecto o con una discrepancia entre la MAC de la trama y la del paquete ARP) que deberían generar una alerta inmediata en cualquier sistema de monitorización de red bien configurado.
-        
-### [🔲] Fase 7: Monitorización Continua e Integración como Sensor de Red
+
+### [🔲] Fase 7: Flujos de Trabajo Profesionales y Seguridad Operacional
+
+*Objetivo: Solidificar `go-arpscan` como una herramienta profesional indispensable, añadiendo características centradas en la seguridad, la precisión y la eficiencia del flujo de trabajo del pentester.*
+
+**Paso 7.1: Gestión de Alcance y Exclusiones (Safety & Precision)**
+*   [🔲] **Implementación de Listas de Exclusión**: Asegura que la herramienta opere con la precisión de un cirujano, cumpliendo estrictamente con las Reglas del Enfrentamiento (Rules of Engagement).
+    *   `--exclude <IP,CIDR>`: Permite especificar en la línea de comandos objetivos que deben ser ignorados por el escáner.
+    *   `--exclude-file <fichero.txt>`: Carga una lista de exclusiones desde un fichero, esencial para evitar el escaneo de sistemas críticos (OT, ICS, equipamiento médico).
+
+**Paso 7.2: Generación de Artefactos y Entregables (Efficiency)**
+*   [🔲] **Módulo de Generación de Informes**: Agiliza drásticamente la fase de reporte, convirtiendo los datos brutos del escaneo en entregables claros y profesionales.
+    *   `--report-html <fichero.html>`: Genera un informe HTML con un resumen, tablas de resultados y hallazgos clave.
+    *   `--report-md <fichero.md>`: Genera un informe en formato Markdown para una fácil integración en wikis y documentación.
+
+### [🔲] Fase 8: Monitorización Continua e Integración como Sensor de Red
 
 *Objetivo: Evolucionar `go-arpscan` a una herramienta de defensa activa (Blue Team), capaz de operar como un sensor de red distribuido y de integrarse con ecosistemas de seguridad más amplios (SIEM, SOAR).*
 
-**Paso 7.1: Detección de Amenazas en Tiempo Real**
+**Paso 8.1: Detección de Amenazas en Tiempo Real**
 *   [🔲] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva de tráfico ARP (ej. Gratuitous ARP) con sondeos activos periódicos para mantener un estado actualizado de la red.
     *   **Salida de Eventos en JSON**: Generará logs estructurados para cada evento significativo, facilitando su ingesta por sistemas automatizados: `{"event": "NEW_HOST", "data": {...}}`, `{"event": "IP_CONFLICT", "data": {...}}`.
-    *   **Detección de ARP Spoofing**: Añadir heurísticas avanzadas para detectar ataques de suplantación en tiempo real. Esto incluye la detección de "MAC Flapping" (cambios rápidos de la MAC asociada a una IP clave como el gateway) y la comparación con una línea base de estado de la red.
+    *   **Detección de ARP Spoofing**: Añadir heurísticas avanzadas para detectar ataques de suplantación en tiempo real. Esto incluye la detección de "MAC Flapping" (cambios rápidos de la MAC asociada a una IP clave como el gateway).
 
-**Paso 7.2: Integración con Ecosistemas de Seguridad**
-*   [🔲] **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: En el modo `--monitor`, añadir la capacidad de publicar eventos directamente a un broker MQTT, convirtiendo cada instancia de `go-arpscan` en un sensor de bajo coste.
-    *   **Flags de Integración**:
-        *   `--publish-mqtt "tcp://user:pass@broker.local:1883"`
-        *   `--mqtt-topic-prefix "net-sensors/segment-finance"`
-    *   **Casos de Uso Estratégicos**:
-        *   **Visibilidad Centralizada**: Múltiples instancias de `go-arpscan` (ej. en Raspberry Pi en cada VLAN) pueden alimentar un dashboard central (Grafana, Node-RED) con el estado en vivo de toda la red.
-        *   **Respuesta a Incidentes Automatizada**: Un evento `ARP_SPOOF_DETECTED` publicado en MQTT puede disparar una alerta en PagerDuty, poner en cuarentena un puerto de switch a través de una API, o iniciar un flujo de trabajo de investigación en una plataforma SOAR.
+**Paso 8.2: Integración con Ecosistemas de Orquestación**
+*   [🔲] **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: En el modo `--monitor`, añadir la capacidad de publicar eventos directamente a un broker MQTT, convirtiendo cada instancia de `go-arpscan` en un sensor de bajo coste para sistemas internos, IoT u OT.
+    *   `--publish-mqtt "tcp://user:pass@broker.local:1883"`
+    *   `--mqtt-topic-prefix "net-sensors/segment-finance"`
+*   [🔲] **Integración Nativa con Webhooks (`--webhook-url`)**: Conecta directamente con el ecosistema de SecOps y DevOps. Cuando se detecta un evento, `go-arpscan` enviará una petición `POST` con el payload JSON del evento a la URL especificada.
+    *   `--webhook-header 'Auth: Bearer ...'`: Soportará cabeceras personalizadas para la autenticación con servicios protegidos.
+    *   **Caso de Uso**: Permite la integración directa con **Slack**, **PagerDuty**, o plataformas **SOAR** para desencadenar flujos de trabajo de respuesta automatizados.
 
 ## Agradecimientos
 
