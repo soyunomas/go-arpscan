@@ -14,6 +14,31 @@ import (
 	"github.com/fatih/color"
 )
 
+// <-- INICIO BLOQUE MOVILIZADO Y MEJORADO -->
+
+// JSONResult define la estructura de cada resultado individual en la salida JSON.
+// Se exporta para ser reutilizada por otros paquetes, como el 'runner' para guardar el estado.
+// Usamos tags para controlar los nombres de los campos y 'omitempty' para ocultar campos vacíos.
+type JSONResult struct {
+	IP     string `json:"ip"`
+	MAC    string `json:"mac"`
+	RTTms  int64  `json:"rtt_ms"`
+	Vendor string `json:"vendor"`
+	Status string `json:"status,omitempty"`
+}
+
+// JSONOutput define la estructura del objeto JSON raíz, que contiene tanto
+// los resultados como un resumen del análisis. Se exporta para su reutilización.
+type JSONOutput struct {
+	Results []JSONResult `json:"results"`
+	Summary struct {
+		Conflicts []string `json:"conflicts,omitempty"`
+		MultiIP   []string `json:"multi_ip,omitempty"`
+	} `json:"summary"`
+}
+
+// <-- FIN BLOQUE MOVILIZADO Y MEJORADO -->
+
 // Constantes para los anchos de columna.
 const (
 	ipColWidth     = 15
@@ -206,28 +231,6 @@ func (f *CSVFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries 
 }
 
 // --- JSON Formatter ---
-// <-- INICIO BLOQUE MODIFICADO: ESTRUCTURAS EXPORTADAS PARA REUTILIZACIÓN -->
-// JSONResult define la estructura de cada resultado individual en la salida JSON.
-// Usamos tags para controlar los nombres de los campos y 'omitempty' para ocultar campos vacíos.
-type JSONResult struct {
-	IP     string `json:"ip"`
-	MAC    string `json:"mac"`
-	RTTms  int64  `json:"rtt_ms"`
-	Vendor string `json:"vendor"`
-	Status string `json:"status,omitempty"`
-}
-
-// JSONOutput define la estructura del objeto JSON raíz.
-type JSONOutput struct {
-	Results []JSONResult `json:"results"`
-	Summary struct {
-		Conflicts []string `json:"conflicts,omitempty"`
-		MultiIP   []string `json:"multi_ip,omitempty"`
-	} `json:"summary"`
-}
-
-// <-- FIN BLOQUE MODIFICADO -->
-
 type JSONFormatter struct {
 	results []scanner.ScanResult
 }
@@ -248,7 +251,6 @@ func (f *JSONFormatter) PrintResult(result scanner.ScanResult) {
 }
 
 func (f *JSONFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {
-	// <-- INICIO BLOQUE MODIFICADO: USAR LAS ESTRUCTURAS EXPORTADAS -->
 	output := JSONOutput{}
 	output.Summary.Conflicts = conflictSummaries
 	output.Summary.MultiIP = multiIPSummaries
@@ -264,7 +266,6 @@ func (f *JSONFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries
 			Status: r.Status,
 		}
 	}
-	// <-- FIN BLOQUE MODIFICADO -->
 
 	// Serializamos la estructura completa a JSON con indentación.
 	jsonData, err := json.MarshalIndent(output, "", "  ")
