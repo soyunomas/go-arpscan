@@ -373,6 +373,23 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
     *   `--webhook-header 'Auth: Bearer ...'`: Soportará cabeceras personalizadas para la autenticación con servicios protegidos.
     *   **Caso de Uso**: Permite la integración directa con **Slack**, **PagerDuty**, o plataformas **SOAR** para desencadenar flujos de trabajo de respuesta automatizados.
 
+## Aviso Legal y de Responsabilidad
+
+**Lea atentamente antes de usar este software.**
+
+Este programa, `go-arpscan`, ha sido creado con fines educativos, para la investigación en seguridad y para la auditoría de redes por parte de administradores de sistemas y profesionales de la ciberseguridad. Es una herramienta potente que puede ser utilizada para diagnosticar problemas de red, pero también para realizar pruebas de seguridad ofensivas.
+
+1.  **Uso Autorizado Únicamente**: El uso de `go-arpscan` en cualquier red o sistema para el cual no tengas **permiso explícito y por escrito** es ilegal en la mayoría de las jurisdicciones. Realizar escaneos, pruebas de evasión o ataques de suplantación sin autorización puede acarrear graves consecuencias legales.
+
+2.  **Responsabilidad Total del Usuario**: Eres el único responsable de tus acciones. Los autores y colaboradores de este proyecto no se hacen responsables de ningún daño, interrupción del servicio, pérdida de datos o consecuencia legal derivada del uso (o mal uso) de este software.
+
+3.  **Riesgo de Interrupción**: Algunas funcionalidades y perfiles tácticos de `go-arpscan` (como `ids-stress-test` o los ataques de suplantación) son intrínsecamente disruptivos y pueden causar inestabilidad en la red, denegación de servicio (DoS) o activar sistemas de alerta. **Utiliza estas funciones únicamente en entornos de laboratorio controlados o durante auditorías autorizadas y planificadas.**
+
+Al descargar, compilar o utilizar este software, aceptas que actúas bajo tu propio riesgo y que comprendes las implicaciones de tus acciones.
+
+**Úsalo de forma ética y responsable.**
+
+
 ## Agradecimientos
 
 Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la herramienta original [arp-scan](http://www.royhills.co.uk/projects/arp-scan/) de Roy Hills.

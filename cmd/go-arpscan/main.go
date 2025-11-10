@@ -806,13 +806,59 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *AppConfig) {
 	}
 }
 
+// randomizeMAC toma una plantilla de MAC (e.g., "00:11:22:XX:XX:XX")
+// y reemplaza cada "XX" con un octeto hexadecimal aleatorio.
+func randomizeMAC(template string) (string, error) {
+	if !strings.Contains(strings.ToUpper(template), "XX") {
+		return template, nil // No se necesita aleatorización
+	}
+
+	parts := strings.Split(template, ":")
+	if len(parts) != 6 {
+		return "", fmt.Errorf("plantilla de MAC para aleatorizar inválida: '%s'", template)
+	}
+
+	var resultParts []string
+	for _, part := range parts {
+		if strings.ToUpper(part) == "XX" {
+			b := byte(rand.Intn(256))
+			resultParts = append(resultParts, fmt.Sprintf("%02X", b))
+		} else {
+			resultParts = append(resultParts, part)
+		}
+	}
+	return strings.Join(resultParts, ":"), nil
+}
+
 // applyProfileDefaults aplica valores desde ProfileConfig (profiles.yaml)
 func applyProfileDefaults(cmd *cobra.Command, profile *ProfileConfig) {
+	// Usamos un mapa para asegurar que si arpsha y srcaddr usan la misma plantilla,
+	// se resuelvan a la misma MAC aleatoria.
+	randomizedMACs := make(map[string]string)
+
 	if !cmd.Flags().Changed("arpsha") && profile.ArpSHA != "" {
-		arpSHA = profile.ArpSHA
+		resolvedMAC, ok := randomizedMACs[profile.ArpSHA]
+		if !ok {
+			var err error
+			resolvedMAC, err = randomizeMAC(profile.ArpSHA)
+			if err != nil {
+				log.Fatalf("Error al aleatorizar arpsha en el perfil '%s': %v", profileName, err)
+			}
+			randomizedMACs[profile.ArpSHA] = resolvedMAC
+		}
+		arpSHA = resolvedMAC
 	}
 	if !cmd.Flags().Changed("srcaddr") && profile.EthSrcMAC != "" {
-		ethSrcMAC = profile.EthSrcMAC
+		resolvedMAC, ok := randomizedMACs[profile.EthSrcMAC]
+		if !ok {
+			var err error
+			resolvedMAC, err = randomizeMAC(profile.EthSrcMAC)
+			if err != nil {
+				log.Fatalf("Error al aleatorizar srcaddr en el perfil '%s': %v", profileName, err)
+			}
+			randomizedMACs[profile.EthSrcMAC] = resolvedMAC
+		}
+		ethSrcMAC = resolvedMAC
 	}
 	if !cmd.Flags().Changed("host-timeout") && profile.HostTimeout > 0 {
 		hostTimeout = profile.HostTimeout
@@ -1154,6 +1200,8 @@ func init() {
 }
 
 func main() {
+	// Seed del generador de números aleatorios para la funcionalidad de MACs
+	rand.Seed(time.Now().UnixNano())
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
