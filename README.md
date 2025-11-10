@@ -305,18 +305,44 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Barra de Progreso (`--progress`)**: Muestra una barra de progreso informativa durante los escaneos para mejorar la experiencia de usuario.
 *   [✅] **Fichero de Configuración (`--config`)**: Soportar un fichero de configuración (e.g., `~/.go-arpscan.yaml`) para establecer opciones por defecto y simplificar la ejecución de comandos recurrentes.
 
-### [🔲] Fase 6: Funcionalidades Futuras (Visión)
+### [🔲] Fase 6: Capacidades de Inteligencia y Evaluación de Seguridad Activa
 
-*Objetivo: Añadir capacidades de monitorización activa y enriquecimiento de datos para convertir `go-arpscan` en una herramienta de inteligencia de red más completa.*
+*Objetivo: Transformar `go-arpscan` de una herramienta de descubrimiento de Capa 2 a una suite de reconocimiento de red local, añadiendo capacidades para perfilar la superficie de ataque y evaluar activamente las debilidades del protocolo ARP.*
 
-**Paso 6.1: Monitorización Continua y Detección de Amenazas**
-*   [🔲] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva (Gratuitous ARP) con sondeos activos periódicos.
-    *   **Salida de Eventos**: Generar logs estructurados en JSON en tiempo real para eventos como `NEW_HOST`, `IP_CONFLICT` y `HOST_DISAPPEARED`.
-    *   **Detección de ARP Spoofing**: Añadir heurísticas para detectar "MAC Flapping" (cambios rápidos de MAC para una misma IP) y alertar sobre posibles ataques.
+**Paso 6.1: Enriquecimiento de Datos y Perfilado de Objetivos (Intelligence Gathering)**
+*   [🔲] **Sondeo de Puertos Ligero**: Añadir la capacidad de realizar un sondeo TCP SYN rápido para identificar servicios activos, permitiendo al analista priorizar objetivos de alto valor de forma instantánea.
+    *   `--probe-ports <puertos>`: Escanea una lista específica de puertos (ej. `22,80,443,3389`).
+    *   `--top-ports <N>`: Escanea los `N` puertos TCP más comunes.
+    *   `--probe-iot-ports`: Un alias para escanear puertos estándar de protocolos IoT/OT (ej. `1883/MQTT`, `5683/CoAP`, `502/Modbus`), crucial para identificar infraestructura de control.
 
-**Paso 6.2: Enriquecimiento de Datos**
-*   [🔲] **Resolución de Nombres Inversa**: Añadir flag `--resolve-names` para realizar una búsqueda de DNS inversa (PTR) y obtener los nombres de host de las IPs descubiertas.
-*   [🔲] **Sondeo de Puertos Básico**: Añadir flag `--probe-ports <ports>` para realizar un sondeo TCP rápido en puertos comunes (e.g., 80, 443, 22) para inferir el tipo de servicio.
+*   [🔲] **Huella Digital del Sistema Operativo (OS Fingerprinting)**: Añadir métodos para inferir el sistema operativo del host, un dato clave para seleccionar el vector de ataque o exploit adecuado.
+    *   **Método Activo (`--fingerprint`)**: Enviar un paquete ICMP Echo Request después del descubrimiento ARP y analizar el TTL de la respuesta para inferir la familia del SO (Windows vs. Linux/Unix).
+    *   **Método Pasivo (Mejora Interna)**: Crear un mapeo interno `Vendor -> Probable OS` para proporcionar una suposición educada sin enviar paquetes adicionales (ej. "VMware, Inc." -> "ESXi/VM").
+
+**Paso 6.2: Módulo de Ataque Controlado (ARP Spoofing)**
+*   [🔲] **Ataque de Suplantación ARP (`--spoof`)**: Implementar un módulo de ataque para realizar envenenamiento de caché ARP (ARP poisoning) y facilitar ataques de intermediario (Man-in-the-Middle). Esta es una funcionalidad de pentesting fundamental.
+    *   **Sintaxis de la Operación**: `go-arpscan --spoof <IP_objetivo> --gateway <IP_gateway>`.
+    *   **Funcionamiento**: La herramienta enviará continuamente paquetes ARP Reply para engañar al objetivo y al gateway, redirigiendo el tráfico a través de la máquina del atacante.
+    *   **Gestión de Redirección**: La herramienta gestionará la activación de `ip_forwarding` en el sistema local para asegurar que el ataque no interrumpa la conectividad de la víctima (convirtiéndose en un MitM en lugar de un DoS).
+    *   **Impacto de Seguridad**: Permite demostrar riesgos críticos como el robo de credenciales en texto plano (HTTP, FTP), secuestro de cookies de sesión y la interceptación de datos sensibles.
+
+### [🔲] Fase 7: Monitorización Continua e Integración como Sensor de Red
+
+*Objetivo: Evolucionar `go-arpscan` a una herramienta de defensa activa (Blue Team), capaz de operar como un sensor de red distribuido y de integrarse con ecosistemas de seguridad más amplios (SIEM, SOAR).*
+
+**Paso 7.1: Detección de Amenazas en Tiempo Real**
+*   [🔲] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva de tráfico ARP (ej. Gratuitous ARP) con sondeos activos periódicos para mantener un estado actualizado de la red.
+    *   **Salida de Eventos en JSON**: Generará logs estructurados para cada evento significativo, facilitando su ingesta por sistemas automatizados: `{"event": "NEW_HOST", "data": {...}}`, `{"event": "IP_CONFLICT", "data": {...}}`.
+    *   **Detección de ARP Spoofing**: Añadir heurísticas avanzadas para detectar ataques de suplantación en tiempo real. Esto incluye la detección de "MAC Flapping" (cambios rápidos de la MAC asociada a una IP clave como el gateway) y la comparación con una línea base de estado de la red.
+
+**Paso 7.2: Integración con Ecosistemas de Seguridad**
+*   [🔲] **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: En el modo `--monitor`, añadir la capacidad de publicar eventos directamente a un broker MQTT, convirtiendo cada instancia de `go-arpscan` en un sensor de bajo coste.
+    *   **Flags de Integración**:
+        *   `--publish-mqtt "tcp://user:pass@broker.local:1883"`
+        *   `--mqtt-topic-prefix "net-sensors/segment-finance"`
+    *   **Casos de Uso Estratégicos**:
+        *   **Visibilidad Centralizada**: Múltiples instancias de `go-arpscan` (ej. en Raspberry Pi en cada VLAN) pueden alimentar un dashboard central (Grafana, Node-RED) con el estado en vivo de toda la red.
+        *   **Respuesta a Incidentes Automatizada**: Un evento `ARP_SPOOF_DETECTED` publicado en MQTT puede disparar una alerta en PagerDuty, poner en cuarentena un puerto de switch a través de una API, o iniciar un flujo de trabajo de investigación en una plataforma SOAR.
 
 ## Agradecimientos
 
