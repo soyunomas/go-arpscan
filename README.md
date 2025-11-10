@@ -305,27 +305,46 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Barra de Progreso (`--progress`)**: Muestra una barra de progreso informativa durante los escaneos para mejorar la experiencia de usuario.
 *   [✅] **Fichero de Configuración (`--config`)**: Soportar un fichero de configuración (e.g., `~/.go-arpscan.yaml`) para establecer opciones por defecto y simplificar la ejecución de comandos recurrentes.
 
-### [🔲] Fase 6: Capacidades de Inteligencia y Evaluación de Seguridad Activa
+### [🔲] Fase 6: Capacidades Avanzadas de Seguridad Ofensiva y Evasión
 
-*Objetivo: Transformar `go-arpscan` de una herramienta de descubrimiento de Capa 2 a una suite de reconocimiento de red local, añadiendo capacidades para perfilar la superficie de ataque y evaluar activamente las debilidades del protocolo ARP.*
+*Objetivo: Evolucionar `go-arpscan` a una herramienta de élite para pentesters y equipos de seguridad, añadiendo inteligencia activa, capacidades de evasión y un arsenal de tácticas de ataque y mimetismo reutilizables.*
 
-**Paso 6.1: Enriquecimiento de Datos y Perfilado de Objetivos (Intelligence Gathering)**
-*   [🔲] **Sondeo de Puertos Ligero**: Añadir la capacidad de realizar un sondeo TCP SYN rápido para identificar servicios activos, permitiendo al analista priorizar objetivos de alto valor de forma instantánea.
+**Paso 6.1: Perfilado de Objetivos (Intelligence Gathering)**
+*   [🔲] **Huella Digital del Sistema Operativo (`--fingerprint`)**: Implementar un sondeo ICMP ligero para analizar el TTL de la respuesta del host. Este método permite inferir la familia del sistema operativo (Windows, Linux/Unix, Cisco) de forma rápida y sigilosa, un dato clave para seleccionar el vector de ataque adecuado.
+*   [🔲] **Sondeo de Puertos Ligero**: Añadir la capacidad de realizar un sondeo TCP SYN rápido para identificar la superficie de ataque de cada host descubierto, permitiendo al analista priorizar objetivos de alto valor de forma instantánea.
     *   `--probe-ports <puertos>`: Escanea una lista específica de puertos (ej. `22,80,443,3389`).
     *   `--top-ports <N>`: Escanea los `N` puertos TCP más comunes.
     *   `--probe-iot-ports`: Un alias para escanear puertos estándar de protocolos IoT/OT (ej. `1883/MQTT`, `5683/CoAP`, `502/Modbus`), crucial para identificar infraestructura de control.
 
-*   [🔲] **Huella Digital del Sistema Operativo (OS Fingerprinting)**: Añadir métodos para inferir el sistema operativo del host, un dato clave para seleccionar el vector de ataque o exploit adecuado.
-    *   **Método Activo (`--fingerprint`)**: Enviar un paquete ICMP Echo Request después del descubrimiento ARP y analizar el TTL de la respuesta para inferir la familia del SO (Windows vs. Linux/Unix).
-    *   **Método Pasivo (Mejora Interna)**: Crear un mapeo interno `Vendor -> Probable OS` para proporcionar una suposición educada sin enviar paquetes adicionales (ej. "VMware, Inc." -> "ESXi/VM").
-
-**Paso 6.2: Módulo de Ataque Controlado (ARP Spoofing)**
-*   [🔲] **Ataque de Suplantación ARP (`--spoof`)**: Implementar un módulo de ataque para realizar envenenamiento de caché ARP (ARP poisoning) y facilitar ataques de intermediario (Man-in-the-Middle). Esta es una funcionalidad de pentesting fundamental.
+**Paso 6.2: Explotación Activa (Controlled Attack Module)**
+*   [🔲] **Ataque de Suplantación ARP (`--spoof`)**: Implementar un módulo de ataque para realizar envenenamiento de caché ARP (ARP poisoning) y facilitar ataques de intermediario (Man-in-the-Middle).
     *   **Sintaxis de la Operación**: `go-arpscan --spoof <IP_objetivo> --gateway <IP_gateway>`.
-    *   **Funcionamiento**: La herramienta enviará continuamente paquetes ARP Reply para engañar al objetivo y al gateway, redirigiendo el tráfico a través de la máquina del atacante.
-    *   **Gestión de Redirección**: La herramienta gestionará la activación de `ip_forwarding` en el sistema local para asegurar que el ataque no interrumpa la conectividad de la víctima (convirtiéndose en un MitM en lugar de un DoS).
+    *   **Funcionamiento Profesional**: La herramienta gestionará la activación de `ip_forwarding` para asegurar que el ataque no sea destructivo (un MitM funcional en lugar de un DoS), demostrando un control preciso del entorno.
     *   **Impacto de Seguridad**: Permite demostrar riesgos críticos como el robo de credenciales en texto plano (HTTP, FTP), secuestro de cookies de sesión y la interceptación de datos sensibles.
 
+**Paso 6.3: Evasión y Mimetismo Táctico: Perfiles de Fingerprint**
+*   [🔲] **Implementación de Perfiles (`--profile <nombre>`)**: Añadir la capacidad de cargar conjuntos de parámetros predefinidos desde un fichero de configuración (`profiles.yaml`). Esta característica encapsula tácticas complejas en un solo flag, permitiendo automatizar el engaño y la evasión. A continuación se detallan los perfiles iniciales que se implementarían:
+
+    *   **Perfil: `windows11-workstation` (Mimetismo)**
+        *   **Objetivo**: Camuflarse como el tipo de tráfico más común en redes corporativas.
+        *   **Técnica**: Envía paquetes ARP con 18 bytes de relleno nulo, imitando el comportamiento por defecto de la pila de red de Windows. Utiliza OUI de fabricantes como Dell o Lenovo.
+
+    *   **Perfil: `macos-ventura` (Mimetismo)**
+        *   **Objetivo**: Mezclarse en entornos de desarrollo, diseño o entre equipos ejecutivos.
+        *   **Técnica**: Envía paquetes ARP estándar sin relleno, utilizando un OUI de `Apple, Inc.` para la dirección MAC de origen.
+
+    *   **Perfil: `hp-officejet-printer` (Engaño)**
+        *   **Objetivo**: Lanzar un escaneo desde la identidad de un dispositivo de baja sospecha en el que se confía implícitamente y que rara vez se monitoriza.
+        *   **Técnica**: Utiliza un OUI de `Hewlett-Packard` y timeouts ligeramente más largos para simular el hardware de red de una impresora.
+
+    *   **Perfil: `stealth-scan-generic` (Táctica)**
+        *   **Objetivo**: Realizar un reconocimiento de máximo sigilo en una red desconocida, minimizando la probabilidad de activar umbrales de alerta en un IDS/IPS.
+        *   **Técnica**: Combina un orden de escaneo aleatorio (`--random`), un ancho de banda extremadamente bajo (`--bandwidth 32k`), y una MAC de origen aleatoria generada a partir de un OUI conocido en cada ejecución.
+
+    *   **Perfil: `ids-stress-test` (Prueba de Defensas)**
+        *   **Objetivo**: Ayudar a los equipos de defensa (Blue Team) a verificar la efectividad de sus reglas de detección.
+        *   **Técnica**: Envía paquetes deliberadamente anómalos (ej. con un tipo de hardware incorrecto o con una discrepancia entre la MAC de la trama y la del paquete ARP) que deberían generar una alerta inmediata en cualquier sistema de monitorización de red bien configurado.
+        
 ### [🔲] Fase 7: Monitorización Continua e Integración como Sensor de Red
 
 *Objetivo: Evolucionar `go-arpscan` a una herramienta de defensa activa (Blue Team), capaz de operar como un sensor de red distribuido y de integrarse con ecosistemas de seguridad más amplios (SIEM, SOAR).*
