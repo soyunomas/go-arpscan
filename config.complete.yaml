@@ -1,0 +1,160 @@
+################################################################################
+#                                                                              #
+#         Fichero de Configuración de Referencia Completa para go-arpscan      #
+#                                                                              #
+#  Este fichero documenta TODAS las opciones configurables.                     #
+#  Cópialo a ~/.config/go-arpscan/config.yaml y ajusta los valores que necesites#
+#                                                                              #
+#  REGLA DE ORO: Los flags en la línea de comandos SIEMPRE tienen prioridad.   #
+#                                                                              #
+################################################################################
+
+# --- PREFERENCIAS GENERALES ---
+
+# Interfaz de red a usar por defecto (-i, --interface).
+# Ejemplo: "eth0", "enp3s0", "wlan0".
+interface: ""
+
+# Nivel de verbosidad por defecto (-v, --verbose).
+# 0: Silencioso, 1: Informativo, 2: Detallado, 3: Depuración.
+verbose: 0
+
+# --- PREFERENCIAS DE LA INTERFAZ DE USUARIO (UI) ---
+ui:
+  # Control del color en la salida (--color).
+  # Opciones: "auto", "on", "off".
+  color: "auto"
+
+  # Muestra una barra de progreso durante el escaneo (--progress).
+  progress: false
+
+# --- PERFIL DE ESCANEO POR DEFECTO ---
+
+scan:
+  # Timeout inicial por host (-t, --host-timeout).
+  host-timeout: "500ms"
+
+  # Timeout global para todo el escaneo (--scan-timeout).
+  # Si se deja en "0s" o se comenta, se calculará automáticamente.
+  scan-timeout: "0s"
+
+  # Número total de intentos por host (-r, --retry).
+  retry: 2
+
+  # Límite de ancho de banda (-B, --bandwidth). No usar junto con 'interval'.
+  # "1M" = 1 Megabit/s, "256k" = 256 Kilobits/s.
+  bandwidth: "1M"
+
+  # Intervalo mínimo entre paquetes (--interval). 'bandwidth' tiene prioridad.
+  # interval: "1ms"
+
+  # Factor de multiplicación del timeout en cada reintento (-b, --backoff).
+  backoff: 1.5
+
+  # Aleatorizar el orden de los hosts a escanear (-R, --random).
+  random: false
+
+# --- FORMATO DE SALIDA POR DEFECTO ---
+
+output:
+  # Formato por defecto. Anulado por --json, --csv, --plain, --quiet.
+  # Opciones: "default", "json", "csv", "plain", "quiet".
+  format: "default"
+
+  # Mostrar el tiempo de ida y vuelta (RTT) en la salida (-D, --rtt).
+  rtt: false
+
+  # No realizar resolución de nombres de host (DNS) (-N, --numeric).
+  numeric: false
+
+# --- CONFIGURACIÓN AVANZADA Y MANIPULACIÓN DE PAQUETES ---
+# Opciones para administradores de red, pentesters y casos de uso específicos.
+
+advanced:
+  # ID de VLAN 802.1Q a usar en todos los escaneos (-Q, --vlan).
+  # 0 significa sin VLAN.
+  vlan: 0
+
+  # No mostrar respuestas duplicadas (-g, --ignoredups).
+  ignoredups: false
+
+  # --- Manipulación de la Trama Ethernet ---
+
+  # Dirección MAC de origen de la TRAMA ETHERNET (-S, --srcaddr).
+  # Si está vacío, usa la MAC de la interfaz.
+  srcaddr: "" # Ejemplo: "DE:AD:BE:EF:00:01"
+
+  # Dirección MAC de destino de la TRAMA ETHERNET (-T, --destaddr).
+  # Si está vacío, usa la dirección de broadcast (ff:ff:ff:ff:ff:ff).
+  destaddr: "" # Ejemplo: "00:11:22:AA:BB:CC"
+
+  # Tipo de protocolo Ethernet (-y, --prototype).
+  # Debe ser un valor hexadecimal de 16 bits como string.
+  # Por defecto es "0x0806" (ARP).
+  prototype: "0x0806"
+
+  # --- Manipulación del Paquete ARP ---
+
+  # Dirección IP de origen en el paquete ARP (-s, --arpspa).
+  # Si está vacío, se usa la IP de la interfaz (o una calculada).
+  # "dest" es un valor especial para usar la IP del objetivo como origen.
+  arpspa: "" # Ejemplo: "192.168.1.254"
+
+  # Dirección MAC de origen en el paquete ARP (-u, --arpsha).
+  # Si está vacío, usa la MAC de la interfaz.
+  arpsha: "" # Ejemplo: "00:11:22:33:44:55"
+
+  # Dirección MAC de destino en el paquete ARP (-w, --arptha).
+  # Si está vacío, usa una MAC cero (00:00:00:00:00:00), que es lo normal
+  # para las solicitudes ARP.
+  arptha: "" # Ejemplo: "FF:FF:FF:FF:FF:FF"
+
+  # Código de operación ARP (-o, --arpop).
+  # 1 = Request (Solicitud, por defecto).
+  # 2 = Reply (Respuesta).
+  arpop: 1
+
+  # Tipo de hardware ARP (-H, --arphrd).
+  # 1 es el estándar para Ethernet.
+  arphrd: 1
+
+  # Tipo de protocolo ARP (-p, --arppro).
+  # Define para qué protocolo de capa 3 es la solicitud ARP.
+  # Debe ser un valor hexadecimal de 16 bits como string.
+  # Por defecto es "0x0800" (IPv4).
+  arppro: "0x0800"
+
+  # Longitud de la dirección de hardware en bytes (-a, --arphln).
+  # 6 es el estándar para direcciones MAC de Ethernet.
+  arphln: 6
+
+  # Longitud de la dirección de protocolo en bytes (-P, --arppln).
+  # 4 es el estándar para direcciones IPv4.
+  arppln: 4
+
+  # --- Framing y Datos Adicionales ---
+
+  # Añade datos de relleno (padding) al final del paquete (-A, --padding).
+  # Debe ser un string de caracteres hexadecimales.
+  padding: "" # Ejemplo: "deadbeef"
+
+  # Usa framing RFC 1042 LLC con SNAP (-L, --llc).
+  # Necesario para algunos equipos de red antiguos o específicos.
+  llc: false
+
+
+# --- RUTAS DE FICHEROS DE DATOS ---
+# Ubicaciones personalizadas para los ficheros de vendors.
+
+files:
+  # Fichero de mapeo OUI (-O, --ouifile).
+  # Si está vacío, busca "oui.txt" en el directorio actual y lo descarga si no existe.
+  ouifile: "" # Ejemplo: "/etc/go-arpscan/data/oui.txt"
+
+  # Fichero de mapeo IAB (--iabfile).
+  # Si está vacío, busca "iab.txt" en el directorio actual y lo descarga si no existe.
+  iabfile: "" # Ejemplo: "/etc/go-arpscan/data/iab.txt"
+
+  # Fichero de mapeo MAC personalizado (--macfile).
+  # Permite definir nombres para MACs o prefijos específicos de tu red.
+  macfile: "" # Ejemplo: "/etc/go-arpscan/data/custom_macs.txt"

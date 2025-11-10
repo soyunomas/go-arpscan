@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go-arpscan/internal/formatter"
 	"go-arpscan/internal/network"
@@ -15,6 +16,8 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +25,73 @@ import (
 	"github.com/fatih/color"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
+
+// --- INICIO: NUEVAS ESTRUCTURAS PARA EL FICHERO DE CONFIGURACIÓN ---
+
+// AppConfig es la estructura raíz que mapea el fichero de configuración YAML.
+type AppConfig struct {
+	Interface string         `yaml:"interface"`
+	Verbose   int            `yaml:"verbose"`
+	UI        UIConfig       `yaml:"ui"`
+	Scan      ScanConfig     `yaml:"scan"`
+	Output    OutputConfig   `yaml:"output"`
+	Advanced  AdvancedConfig `yaml:"advanced"`
+	Files     FilePaths      `yaml:"files"`
+}
+
+// UIConfig contiene preferencias relacionadas con la interfaz de usuario.
+type UIConfig struct {
+	Color    string `yaml:"color"`
+	Progress bool   `yaml:"progress"`
+}
+
+// ScanConfig contiene los parámetros por defecto para el comportamiento del escaneo.
+type ScanConfig struct {
+	HostTimeout   time.Duration `yaml:"host-timeout"`
+	ScanTimeout   time.Duration `yaml:"scan-timeout"`
+	Retry         int           `yaml:"retry"`
+	Bandwidth     string        `yaml:"bandwidth"`
+	Interval      time.Duration `yaml:"interval"`
+	BackoffFactor float64       `yaml:"backoff"`
+	Random        bool          `yaml:"random"`
+}
+
+// OutputConfig define el formato de salida por defecto.
+type OutputConfig struct {
+	Format  string `yaml:"format"`
+	RTT     bool   `yaml:"rtt"`
+	Numeric bool   `yaml:"numeric"`
+}
+
+// AdvancedConfig agrupa las opciones de manipulación de paquetes para power-users.
+type AdvancedConfig struct {
+	Vlan       int    `yaml:"vlan"`
+	ArpSPA     string `yaml:"arpspa"`
+	ArpSHA     string `yaml:"arpsha"`
+	EthSrcMAC  string `yaml:"srcaddr"`
+	EthDstMAC  string `yaml:"destaddr"`
+	ArpTHA     string `yaml:"arptha"`
+	ArpOpCode  int    `yaml:"arpop"`
+	Prototype  string `yaml:"prototype"`
+	ArpHrd     int    `yaml:"arphrd"`
+	ArpPro     string `yaml:"arppro"`
+	ArpHln     int    `yaml:"arphln"`
+	ArpPln     int    `yaml:"arppln"`
+	Padding    string `yaml:"padding"`
+	LLC        bool   `yaml:"llc"`
+	IgnoreDups bool   `yaml:"ignoredups"`
+}
+
+// FilePaths define rutas personalizadas para ficheros de datos.
+type FilePaths struct {
+	OUIFile string `yaml:"ouifile"`
+	IABFile string `yaml:"iabfile"`
+	MACFile string `yaml:"macfile"`
+}
+
+// --- FIN: NUEVAS ESTRUCTURAS ---
 
 const (
 	ouiFileDefaultName  = "oui.txt"
@@ -37,49 +106,50 @@ var (
 	version = "dev"
 
 	// Flags
-	ifaceName     string
-	filePath      string
-	scanTimeout   time.Duration
-	hostTimeout   time.Duration
-	retry         int
-	interval      time.Duration
-	backoffFactor float64
-	arpSPA        string
-	arpSHA        string
-	ethSrcMAC     string
-	arpOpCode     int
-	ethDstMAC     string
-	arpTHA        string
-	ethPrototype  string
-	arpHrd        int
-	arpPro        string
-	arpHln        int
-	arpPln        int
-	paddingHex    string
-	useLLC        bool // <-- NUEVO CAMPO
-	quiet         bool
-	plain         bool
-	jsonOutput    bool
-	csvOutput     bool
-	showRTT       bool
-	random        bool
-	randomSeed    int64
-	bandwidth     string
-	verboseCount  int
-	versionFlag   bool
-	ouiFilePath   string
-	iabFilePath   string
-	macFilePath   string
-	numeric       bool
-	useLocalnet   bool
-	ignoreDups    bool
-	colorMode     string
-	pcapSaveFile  string
-	vlanID        int
-	snaplen       int
-	stateFilePath string
-	diffMode      bool
-	showProgress  bool
+	configFilePath string // <-- NUEVO FLAG
+	ifaceName      string
+	filePath       string
+	scanTimeout    time.Duration
+	hostTimeout    time.Duration
+	retry          int
+	interval       time.Duration
+	backoffFactor  float64
+	arpSPA         string
+	arpSHA         string
+	ethSrcMAC      string
+	arpOpCode      int
+	ethDstMAC      string
+	arpTHA         string
+	ethPrototype   string
+	arpHrd         int
+	arpPro         string
+	arpHln         int
+	arpPln         int
+	paddingHex     string
+	useLLC         bool
+	quiet          bool
+	plain          bool
+	jsonOutput     bool
+	csvOutput      bool
+	showRTT        bool
+	random         bool
+	randomSeed     int64
+	bandwidth      string
+	verboseCount   int
+	versionFlag    bool
+	ouiFilePath    string
+	iabFilePath    string
+	macFilePath    string
+	numeric        bool
+	useLocalnet    bool
+	ignoreDups     bool
+	colorMode      string
+	pcapSaveFile   string
+	vlanID         int
+	snaplen        int
+	stateFilePath  string
+	diffMode       bool
+	showProgress   bool
 )
 
 var rootCmd = &cobra.Command{
@@ -91,28 +161,16 @@ Los hosts de destino deben especificarse en la línea de comandos a menos que se
 en cuyo caso los destinos se leen desde el archivo especificado, o si se usa la opción --localnet,
 en cuyo caso los destinos se generan a partir de la dirección IP y la máscara de red de la interfaz.
 
-Si no se especifica una interfaz con -i, go-arpscan intentará seleccionar una automáticamente.
+Las opciones pueden especificarse en un fichero de configuración (e.g., ~/.config/go-arpscan/config.yaml).
+Los flags de la línea de comandos siempre tienen prioridad sobre los valores del fichero de configuración.
 
-Es necesario ejecutar go-arpscan como root, ya que las funciones que utiliza para leer y escribir
-paquetes de red requieren privilegios elevados.
-
-Los hosts de destino se pueden especificar como direcciones IP, nombres de host, o rangos. También puede especificar
-el destino como IPnetwork/bits (p. ej., 192.168.1.0/24) para especificar todos los hosts en la red
-dada, o IPstart-IPend (p. ej., 192.168.1.3-192.168.1.27) para especificar todos los hosts en
-el rango inclusivo.
-
-Reporta bugs o envía sugerencias a tu mentor Gopher.`,
+Es necesario ejecutar go-arpscan como root.`,
 	Example: `  sudo ./go-arpscan --localnet --progress
   sudo ./go-arpscan -i eth0 192.168.1.0/24
   sudo ./go-arpscan -i eth0 192.168.1.1-192.168.1.254
   sudo ./go-arpscan --file=hostlist.txt --json
-  sudo ./go-arpscan -i wlan0 --localnet --pcapsavefile=capture.pcap`,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		if versionFlag {
-			fmt.Printf("go-arpscan version %s\n", version)
-			os.Exit(0)
-		}
-	},
+  sudo ./go-arpscan --config=mi_perfil.yaml --localnet`,
+	PersistentPreRun: initConfig,
 	Run: func(cmd *cobra.Command, args []string) {
 		if os.Geteuid() != 0 {
 			log.Fatal("Este programa debe ser ejecutado como root.")
@@ -396,14 +454,14 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			ArpHardwareLen:    finalArpHln,
 			ArpProtocolLen:    finalArpPln,
 			PaddingData:       finalPaddingData,
-			UseLLC:            useLLC, // <-- PASAR EL VALOR
+			UseLLC:            useLLC,
 			Verbosity:         verboseCount,
 			PcapSaveFile:      pcapSaveFile,
 			VlanID:            uint16(vlanID),
 			Snaplen:           snaplen,
 		}
 
-		if !isScriptingOutput && stateFilePath == "" {
+		if !isScriptingOutput && stateFilePath == "" && !showProgress {
 			log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
 			if config.VlanID > 0 {
 				log.Printf("Usando VLAN tag: %d", config.VlanID)
@@ -455,11 +513,9 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			if cmd.Flags().Changed("padding") {
 				log.Printf("Añadiendo relleno personalizado al paquete: %s", paddingHex)
 			}
-			// <-- INICIO BLOQUE NUEVO: Mensaje de log para LLC -->
 			if useLLC {
 				log.Println("Usando framing RFC 1042 LLC/SNAP para los paquetes salientes.")
 			}
-			// <-- FIN BLOQUE NUEVO -->
 			if pcapSaveFile != "" {
 				log.Printf("Guardando respuestas ARP en el fichero pcap: %s", pcapSaveFile)
 			}
@@ -470,20 +526,49 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 			return
 		}
 
-		if isScriptingOutput || stateFilePath != "" {
-			allResults := runScanAndCollect(config, isScriptingOutput)
+		// <-- INICIO BLOQUE MODIFICADO: Lógica de decisión centralizada -->
+		// Decidimos si necesitamos recolectar resultados en memoria ANTES de imprimirlos.
+		// Esto es necesario para:
+		// 1. Salidas para scripting (json, csv, etc.) que requieren un formato completo.
+		// 2. Modo progreso (--progress) para evitar que la barra se corrompa con la salida.
+		// 3. Guardado de estado (--state-file) que necesita todos los resultados.
+		shouldBufferResults := isScriptingOutput || showProgress || stateFilePath != ""
+
+		if shouldBufferResults {
+			// Los logs de inicio se imprimen aquí para que aparezcan antes de la barra de progreso.
+			if !isScriptingOutput && stateFilePath == "" {
+				log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
+				log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
+			}
+
+			allResults := runScanAndCollect(config)
+			
 			if stateFilePath != "" {
 				saveStateToFile(allResults, stateFilePath)
-				if formatFlags == 0 {
+				// Si la única razón para bufferizar era guardar el estado (y no hay progreso o scripting), salimos.
+				if !showProgress && !isScriptingOutput {
 					return
 				}
 			}
-			printResults(allResults, isScriptingOutput)
+
+			// Si no es una salida para script, significa que estamos aquí por --progress.
+			// Imprimimos la cabecera después de que la barra haya terminado.
+			if !isScriptingOutput {
+				f := formatter.NewDefaultFormatter(showRTT)
+				f.PrintHeader()
+				for _, r := range allResults.Results {
+					f.PrintResult(r)
+				}
+				f.PrintFooter(allResults.ConflictSummaries, allResults.MultiIPSummaries)
+			} else {
+				// Para scripting, usamos la función genérica.
+				printResults(allResults, isScriptingOutput)
+			}
 		} else {
+			// Modo interactivo clásico: imprimir resultados en tiempo real.
 			runScanAndPrintRealTime(config)
 		}
-
-
+		// <-- FIN BLOQUE MODIFICADO -->
 
 		if !isScriptingOutput && stateFilePath == "" {
 			log.Println("Escaneo completado.")
@@ -491,25 +576,195 @@ Reporta bugs o envía sugerencias a tu mentor Gopher.`,
 	},
 }
 
+// --- INICIO: NUEVAS FUNCIONES PARA CARGAR CONFIGURACIÓN ---
+
+func initConfig(cmd *cobra.Command, args []string) {
+	// 1. Manejar el flag de versión primero, ya que sale inmediatamente.
+	if versionFlag {
+		fmt.Printf("go-arpscan version %s\n", version)
+		os.Exit(0)
+	}
+
+	// 2. Encontrar y cargar el fichero de configuración.
+	cfgPath, err := findConfigFile()
+	if err != nil {
+		if verboseCount > 0 { // Solo mostrar advertencia si el usuario es verboso.
+			log.Printf("Advertencia: no se pudo buscar el fichero de configuración: %v", err)
+		}
+	}
+
+	if cfgPath != "" {
+		if _, err := os.Stat(cfgPath); err == nil {
+			data, err := os.ReadFile(cfgPath)
+			if err != nil {
+				log.Fatalf("Error leyendo el fichero de configuración %s: %v", cfgPath, err)
+			}
+
+			var cfg AppConfig
+			if err := yaml.Unmarshal(data, &cfg); err != nil {
+				log.Fatalf("Error parseando el fichero de configuración YAML %s: %v", cfgPath, err)
+			}
+
+			// 3. Aplicar los valores de la configuración a las variables de los flags,
+			//    SOLO si el flag correspondiente no fue establecido en la línea de comandos.
+			applyConfigDefaults(cmd, &cfg)
+
+		} else if cmd.Flags().Changed("config") {
+			// Es un error si el usuario especifica un fichero que no existe.
+			log.Fatalf("Error: el fichero de configuración especificado %s no se encontró.", cfgPath)
+		}
+	}
+}
+
+func findConfigFile() (string, error) {
+	// Prioridad 1: Flag --config
+	if configFilePath != "" {
+		return configFilePath, nil
+	}
+
+	// Prioridad 2: Directorio de configuración del usuario
+	usr, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("no se pudo obtener el directorio del usuario actual: %w", err)
+	}
+	userConfigPath := filepath.Join(usr.HomeDir, ".config", "go-arpscan", "config.yaml")
+	if _, err := os.Stat(userConfigPath); err == nil {
+		return userConfigPath, nil
+	}
+
+	return "", nil // No se encontró ningún fichero de configuración
+}
+
+func applyConfigDefaults(cmd *cobra.Command, cfg *AppConfig) {
+	// Preferencias Generales
+	if !cmd.Flags().Changed("interface") && cfg.Interface != "" {
+		ifaceName = cfg.Interface
+	}
+	if !cmd.Flags().Changed("verbose") && cfg.Verbose > 0 {
+		verboseCount = cfg.Verbose
+	}
+
+	// UI
+	if !cmd.Flags().Changed("color") && cfg.UI.Color != "" {
+		colorMode = cfg.UI.Color
+	}
+	if !cmd.Flags().Changed("progress") && cfg.UI.Progress {
+		showProgress = true
+	}
+
+	// Perfil de Escaneo
+	if !cmd.Flags().Changed("host-timeout") && cfg.Scan.HostTimeout > 0 {
+		hostTimeout = cfg.Scan.HostTimeout
+	}
+	if !cmd.Flags().Changed("scan-timeout") && cfg.Scan.ScanTimeout > 0 {
+		scanTimeout = cfg.Scan.ScanTimeout
+	}
+	if !cmd.Flags().Changed("retry") && cfg.Scan.Retry > 0 {
+		retry = cfg.Scan.Retry
+	}
+	if !cmd.Flags().Changed("bandwidth") && !cmd.Flags().Changed("interval") && cfg.Scan.Bandwidth != "" {
+		bandwidth = cfg.Scan.Bandwidth
+	}
+	if !cmd.Flags().Changed("interval") && !cmd.Flags().Changed("bandwidth") && cfg.Scan.Interval > 0 {
+		interval = cfg.Scan.Interval
+	}
+	if !cmd.Flags().Changed("backoff") && cfg.Scan.BackoffFactor > 0 {
+		backoffFactor = cfg.Scan.BackoffFactor
+	}
+	if !cmd.Flags().Changed("random") && cfg.Scan.Random {
+		random = true
+	}
+
+	// Formato de Salida
+	if !cmd.Flags().Changed("rtt") && cfg.Output.RTT {
+		showRTT = true
+	}
+	if !cmd.Flags().Changed("numeric") && cfg.Output.Numeric {
+		numeric = true
+	}
+
+	// Manejo especial para el formato de salida, ya que son mutuamente excluyentes.
+	formatFlagsSet := cmd.Flags().Changed("json") || cmd.Flags().Changed("csv") || cmd.Flags().Changed("plain") || cmd.Flags().Changed("quiet")
+	if !formatFlagsSet && cfg.Output.Format != "" {
+		switch strings.ToLower(cfg.Output.Format) {
+		case "json":
+			jsonOutput = true
+		case "csv":
+			csvOutput = true
+		case "plain":
+			plain = true
+		case "quiet":
+			quiet = true
+		}
+	}
+
+	// Ficheros de Datos
+	if !cmd.Flags().Changed("ouifile") && cfg.Files.OUIFile != "" {
+		ouiFilePath = cfg.Files.OUIFile
+	}
+	if !cmd.Flags().Changed("iabfile") && cfg.Files.IABFile != "" {
+		iabFilePath = cfg.Files.IABFile
+	}
+	if !cmd.Flags().Changed("macfile") && cfg.Files.MACFile != "" {
+		macFilePath = cfg.Files.MACFile
+	}
+
+	// Avanzado
+	if !cmd.Flags().Changed("vlan") && cfg.Advanced.Vlan > 0 {
+		vlanID = cfg.Advanced.Vlan
+	}
+	if !cmd.Flags().Changed("arpspa") && cfg.Advanced.ArpSPA != "" {
+		arpSPA = cfg.Advanced.ArpSPA
+	}
+	if !cmd.Flags().Changed("arpsha") && cfg.Advanced.ArpSHA != "" {
+		arpSHA = cfg.Advanced.ArpSHA
+	}
+	if !cmd.Flags().Changed("srcaddr") && cfg.Advanced.EthSrcMAC != "" {
+		ethSrcMAC = cfg.Advanced.EthSrcMAC
+	}
+	if !cmd.Flags().Changed("destaddr") && cfg.Advanced.EthDstMAC != "" {
+		ethDstMAC = cfg.Advanced.EthDstMAC
+	}
+	if !cmd.Flags().Changed("arptha") && cfg.Advanced.ArpTHA != "" {
+		arpTHA = cfg.Advanced.ArpTHA
+	}
+	if !cmd.Flags().Changed("arpop") && cfg.Advanced.ArpOpCode > 0 {
+		arpOpCode = cfg.Advanced.ArpOpCode
+	}
+	if !cmd.Flags().Changed("prototype") && cfg.Advanced.Prototype != "" {
+		ethPrototype = cfg.Advanced.Prototype
+	}
+	if !cmd.Flags().Changed("arphrd") && cfg.Advanced.ArpHrd > 0 {
+		arpHrd = cfg.Advanced.ArpHrd
+	}
+	if !cmd.Flags().Changed("arppro") && cfg.Advanced.ArpPro != "" {
+		arpPro = cfg.Advanced.ArpPro
+	}
+	if !cmd.Flags().Changed("arphln") && cfg.Advanced.ArpHln > 0 {
+		arpHln = cfg.Advanced.ArpHln
+	}
+	if !cmd.Flags().Changed("arppln") && cfg.Advanced.ArpPln > 0 {
+		arpPln = cfg.Advanced.ArpPln
+	}
+	if !cmd.Flags().Changed("padding") && cfg.Advanced.Padding != "" {
+		paddingHex = cfg.Advanced.Padding
+	}
+	if !cmd.Flags().Changed("llc") && cfg.Advanced.LLC {
+		useLLC = true
+	}
+	if !cmd.Flags().Changed("ignoredups") && cfg.Advanced.IgnoreDups {
+		ignoreDups = true
+	}
+}
+
+// --- FIN: NUEVAS FUNCIONES ---
+
 func runScanAndPrintRealTime(config *scanner.Config) {
 	var f formatter.Formatter
 	if plain {
 		f = formatter.NewPlainFormatter(showRTT)
 	} else {
 		f = formatter.NewDefaultFormatter(showRTT)
-	}
-
-	var bar *progressbar.ProgressBar
-	if showProgress {
-		bar = progressbar.NewOptions(
-			len(config.IPs)*config.Retry,
-			progressbar.OptionSetWriter(os.Stderr),
-			progressbar.OptionShowCount(),
-			progressbar.OptionSetWidth(30),
-			progressbar.OptionSpinnerType(14),
-			progressbar.OptionFullWidth(),
-		)
-		config.ProgressBar = bar
 	}
 
 	resultsChan, err := scanner.StartScan(config)
@@ -521,18 +776,15 @@ func runScanAndPrintRealTime(config *scanner.Config) {
 
 	summaries := processResults(resultsChan, ignoreDups, verboseCount, f.PrintResult)
 
-	if bar != nil {
-		_ = bar.Finish()
-	}
-
 	f.PrintFooter(summaries.ConflictSummaries, summaries.MultiIPSummaries)
 }
 
-func runScanAndCollect(config *scanner.Config, isScriptingOutput bool) AnalyzedResults {
+func runScanAndCollect(config *scanner.Config) AnalyzedResults {
 	var bar *progressbar.ProgressBar
-	shouldShowProgressBar := showProgress && !isScriptingOutput
-
-	if shouldShowProgressBar {
+	// La decisión de si mostrar la barra se toma aquí, basándose en el flag showProgress
+	// y asegurándonos de que no es una salida para scripting.
+	isScriptingOutput := jsonOutput || csvOutput || plain || quiet
+	if showProgress && !isScriptingOutput {
 		bar = progressbar.NewOptions(
 			len(config.IPs)*config.Retry,
 			progressbar.OptionSetWriter(os.Stderr),
@@ -575,6 +827,9 @@ func runDiffMode(config *scanner.Config, stateFile string) {
 
 	stateContent, err := os.ReadFile(stateFile)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			log.Fatalf("Error: el fichero de estado '%s' no existe. Ejecute un escaneo con --state-file para crearlo primero.", stateFile)
+		}
 		log.Fatalf("Error al leer el fichero de estado '%s': %v", stateFile, err)
 	}
 
@@ -589,7 +844,7 @@ func runDiffMode(config *scanner.Config, stateFile string) {
 	}
 
 	log.Printf("Iniciando nuevo escaneo para la comparación...")
-	allNewResults := runScanAndCollect(config, false) // isScriptingOutput es false aquí
+	allNewResults := runScanAndCollect(config)
 
 	newStateMap := make(map[string]hostInfo)
 	for _, res := range allNewResults.Results {
@@ -707,6 +962,7 @@ func printResults(analyzed AnalyzedResults, isScriptingOutput bool) {
 	} else if plain {
 		f = formatter.NewPlainFormatter(showRTT)
 	} else {
+		// Este caso ahora es manejado fuera, pero lo dejamos como fallback.
 		f = formatter.NewDefaultFormatter(showRTT)
 	}
 
@@ -752,6 +1008,8 @@ func init() {
 	rootCmd.PersistentFlags().SortFlags = false
 	rootCmd.Flags().SortFlags = false
 
+	rootCmd.PersistentFlags().StringVar(&configFilePath, "config", "", "Ruta al fichero de configuración YAML (por defecto ~/.config/go-arpscan/config.yaml).")
+
 	rootCmd.PersistentFlags().StringVarP(&ifaceName, "interface", "i", "", "Usa la interfaz de red <s>. Si no se especifica, se auto-detecta.")
 	rootCmd.PersistentFlags().DurationVar(&scanTimeout, "scan-timeout", 20*time.Second, "Establece un timeout global de <d> para el escaneo completo.\n(calculado automáticamente si no se especifica)")
 
@@ -780,9 +1038,7 @@ func init() {
 	rootCmd.Flags().IntVarP(&arpPln, "arppln", "P", 4, "Establece la longitud de la dirección de protocolo a <i> (ar$pln).\nPor defecto es 4 para IPv4.")
 
 	rootCmd.Flags().StringVarP(&paddingHex, "padding", "A", "", "Añade datos de relleno (padding) en formato hexadecimal <h> al final del paquete.")
-	// <-- INICIO BLOQUE NUEVO: Añadir flag de LLC -->
 	rootCmd.Flags().BoolVarP(&useLLC, "llc", "L", false, "Usa framing RFC 1042 LLC con SNAP.")
-	// <-- FIN BLOQUE NUEVO -->
 
 	rootCmd.Flags().StringVarP(&ouiFilePath, "ouifile", "O", "", "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
 	rootCmd.Flags().StringVar(&iabFilePath, "iabfile", "", "Usa el fichero de mapeo IAB de IEEE a vendor <a>.\nPor defecto, se busca 'iab.txt' y se descarga si no existe.")

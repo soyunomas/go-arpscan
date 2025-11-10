@@ -10,6 +10,7 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
 *   ✨ **Auto-Detección Inteligente**: Detecta automáticamente la interfaz de red a utilizar si no se especifica una.
+*   ⚙️ **Gestión Centralizada con Fichero de Configuración**: Define perfiles de escaneo y opciones por defecto en un fichero YAML (`--config`) para simplificar la ejecución de comandos recurrentes.
 *   📊 **Auditoría de Red**: Guarda instantáneas del estado de la red y compara escaneos para detectar dispositivos nuevos, eliminados o modificados (`--diff`).
 *   🎨 **Salida Coloreada y Alineada**: Formato de salida moderno y legible, con control total sobre los colores (`--color=auto|on|off`).
 *   📜 **Salida Estructurada**: Soporte nativo para `--json` y `--csv`, facilitando la integración con scripts y herramientas de análisis.
@@ -67,6 +68,9 @@ sudo ./go-arpscan --localnet --json | jq '.results[] | {ip, mac, vendor}'
 
 # Guardar los resultados en un fichero CSV para analizarlos en una hoja de cálculo
 sudo ./go-arpscan --localnet --csv > network_scan.csv
+
+# Usar un fichero de configuración para definir opciones por defecto y ejecutar un escaneo
+sudo ./go-arpscan --config=perfil_rapido.yaml --localnet
 ```
 
 ### Auditoría y Detección de Cambios
@@ -82,34 +86,71 @@ sudo ./go-arpscan --localnet --state-file network_baseline.json
 sudo ./go-arpscan --localnet --diff --state-file network_baseline.json --progress
 ```
 
+## Fichero de Configuración
+
+`go-arpscan` soporta el uso de un fichero de configuración en formato YAML para establecer valores por defecto, simplificando la ejecución de escaneos recurrentes.
+
+**Prioridad**: Los flags especificados en la línea de comandos siempre anularán los valores del fichero de configuración.
+
+**Ubicación**:
+1.  La ruta especificada con el flag `--config <ruta>`.
+2.  Si no se usa `--config`, se buscará en `~/.config/go-arpscan/config.yaml`.
+
+Puedes usar el fichero `config.complete.yaml` del repositorio como plantilla.
+
+**Ejemplo de `~/.config/go-arpscan/config.yaml`**:
+```yaml
+# Establecer 'eno1' como mi interfaz de red por defecto
+interface: "eno1"
+
+# Siempre mostrar la barra de progreso y el RTT
+ui:
+  progress: true
+output:
+  rtt: true
+
+# Usar un perfil de escaneo más agresivo por defecto
+scan:
+  retry: 3
+  host-timeout: "250ms"
+  bandwidth: "2M"
+```
+Con esta configuración, el comando `sudo go-arpscan --localnet` se ejecutará usando `eno1`, con 3 reintentos, un timeout de 250ms, un ancho de banda de 2Mbit/s y mostrará la barra de progreso y el RTT sin necesidad de especificarlo cada vez.
+
 ### Ejemplo de Salida
 ```
-# Salida de un escaneo normal
+# Salida de un escaneo normal con varios escenarios de diagnóstico
 $ sudo ./go-arpscan -i eno1 192.168.24.0/24
-2025/11/08 01:15:10 Iniciando escaneo en la interfaz eno1 (98:90:96:ab:c0:20)
+2025/11/08 01:15:10 Iniciando escaneo en la interfaz eno1 (aa:bb:cc:00:11:22)
 2025/11/08 01:15:10 Objetivos a escanear: 254 IPs
 2025/11/08 01:15:10 Usando IP de origen dinámica para cada paquete (comportamiento por defecto).
 IP Address         MAC Address          Status          Vendor
 ---------------    -----------------    ------------    ------------------------------
-192.168.24.1       40:31:3c:0a:14:a7                    XIAOMI Electronics,CO.,LTD
-192.168.24.12      28:d1:27:1b:da:91    (Multi-IP)      Beijing Xiaomi Mobile Software Co., Ltd
-192.168.24.50      3c:21:f4:1a:c4:ef    (CONFLICT)      Brother Industries, LTD.
+192.168.24.1       aa:bb:cc:dd:ee:01                    Router Manufacturer Inc.
+192.168.24.10      aa:bb:cc:dd:ee:f0    (Multi-IP)      Virtualization Corp.
+192.168.24.11      aa:bb:cc:dd:ee:f0    (Multi-IP)      Virtualization Corp.
+192.168.24.50      aa:bb:cc:dd:ee:a1                    Brother Industries, LTD.
+192.168.24.50      aa:bb:cc:dd:ee:b2    (CONFLICT)      Generic NIC Company
+192.168.24.100     aa:bb:cc:dd:ee:c3                    HP Inc.
+192.168.24.100     aa:bb:cc:dd:ee:c3    (DUPLICATE)     HP Inc.
 
 # Salida del modo --diff
 $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 2025/11/09 10:30:00 Modo DIFF: Comparando el escaneo actual con el estado de 'network_baseline.json'
 ...
-[+] AÑADIDO:     192.168.24.112  a0:b1:c2:d3:e4:f5  (Apple, Inc.)
-[-] ELIMINADO:   192.168.24.50   3c:21:f4:1a:c4:ef  (Brother Industries, LTD.)
+[+] AÑADIDO:     192.168.24.112  aa:bb:cc:11:22:33  (Apple, Inc.)
+[-] ELIMINADO:   192.168.24.50   aa:bb:cc:44:55:66  (Brother Industries, LTD.)
 [~] MODIFICADO:  192.168.24.10
-	  - MAC ANTERIOR: 00:1a:2b:3c:4d:5e (Dell Inc.)
-	  + MAC NUEVA:    b8:27:eb:12:34:56 (Raspberry Pi Foundation)
+	  - MAC ANTERIOR: aa:bb:cc:00:00:01 (Dell Inc.)
+	  + MAC NUEVA:    aa:bb:cc:00:00:02 (Raspberry Pi Foundation)
 ```
 
 ### Lista Completa de Parámetros
 
 | Flag Corto | Flag Largo | Tipo | Descripción | Por Defecto |
 | :---: | :--- | :--- | :--- | :--- |
+| `-h` | `--help` | `bool` | Muestra el mensaje de ayuda y sale. | `false` |
+| | `--config` | `string` | Ruta al fichero de configuración YAML. | `~/.config/go-arpscan/config.yaml` |
 | `-i` | `--interface` | `string` | Interfaz de red a utilizar. | Auto-detectada |
 | | `--scan-timeout`| `duration` | Timeout global para todo el escaneo. | Calculado automáticamente |
 | | `--localnet` | `bool` | Escanear la red local de la interfaz. | `false` |
@@ -153,7 +194,6 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | `-n` | `--snap` | `int` | Establece la longitud de captura pcap a `<i>` bytes. | `65536` |
 | `-v` | `--verbose` | `count` | Aumenta la verbosidad (-v, -vv, -vvv). | `0` |
 | `-V` | `--version` | `bool` | Muestra la versión del programa y sale. | `false` |
-| `-h` | `--help` | `bool` | Muestra el mensaje de ayuda y sale. | `false` |
 
 ---
 
@@ -168,7 +208,7 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | Leer Objetivos de Fichero | `--file=<s>`, `-f <s>` | `--file=<s>`, `-f <s>` | ✅ **Implementado**. |
 | No usar DNS | `--numeric`, `-N` | `--numeric`, `-N` | ✅ **Implementado**. |
 | **Control del Escaneo** | | | |
-| Especificar Interfaz | `--interface=<s>`, `-I <s>` | `--interface=<s>`, `-i <s>` | ✨ **Mejorado**. ¡Ojo! El flag corto es diferente. `go-arpscan` auto-detecta la mejor interfaz si no se especifica. |
+| Especificar Interfaz | `--interface=<s>`, `-I <s>` | `--interface=<s>`, `-i <s>` | ✅ **Implementado**. ¡Ojo! El flag corto es diferente. Al igual que `arp-scan`, `go-arpscan` también auto-detecta la mejor interfaz si no se especifica. |
 | Timeouts por Host | `--timeout=<i>`, `-t <i>` | `--host-timeout=<d>`, `-t <d>` | ✅ **Implementado**. `go-arpscan` acepta unidades de tiempo (e.g., `750ms`). |
 | Nº de Reintentos | `--retry=<i>`, `-r <i>` | `--retry=<i>`, `-r <i>` | ✅ **Implementado**. |
 | Intervalo entre Paquetes | `--interval=<x>`, `-i <x>` | `--interval=<d>` | ✅ **Implementado**. ¡Ojo! En `arp-scan`, `-i` es alias de `--interval`. En `go-arpscan`, `-i` es alias de `--interface`. |
@@ -185,6 +225,10 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | Salida JSON | *(No disponible)* | `--json` | 💡 **Nuevo**. Característica clave para la integración moderna. |
 | Salida CSV | *(No disponible)* | `--csv` | 💡 **Nuevo**. Facilita el análisis de datos en hojas de cálculo. |
 | Salida Coloreada | *(No disponible)* | `--color=<auto\|on\|off>` | 💡 **Nuevo**. Mejora la legibilidad de la salida por defecto. |
+| **Integración y Usabilidad** | | | |
+| Fichero de Configuración | *(No disponible)* | `--config=<s>` | 💡 **Nuevo**. Permite definir opciones por defecto en un fichero YAML, ideal para perfiles de escaneo recurrentes. |
+| Barra de Progreso | *(No disponible)* | `--progress` | 💡 **Nuevo**. Feedback visual inmediato en escaneos largos. |
+| Auditoría de Red | *(No disponible)* | `--state-file`, `--diff` | 💡 **Nuevo**. Permite guardar y comparar escaneos para detectar cambios en la red a lo largo del tiempo. |
 | **Manipulación de Paquetes** | | | |
 | Fichero OUI | `--ouifile=<s>`, `-O <s>` | `--ouifile=<s>`, `-O <s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente si no existe. |
 | Fichero IAB | `--iabfile=<s>` | `--iabfile=<s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente. |
@@ -208,9 +252,9 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 
 A continuación se detalla el estado actual y las funcionalidades futuras planificadas para `go-arpscan`.
 
-### ✅ Fases 1 y 2: Fundación, Usabilidad y Diagnósticos (COMPLETADO)
+### ✅ Fases 1 a 4: Fundación, Usabilidad, Diagnósticos y Paridad (COMPLETADO)
 
-*Objetivo: Construir una base sólida y añadir las características de usabilidad e integración que hacen a la herramienta moderna y fácil de usar en flujos de trabajo reales.*
+*Objetivo: Construir una base sólida, añadir las características de usabilidad e integración que hacen a la herramienta moderna y alcanzar la paridad completa de manipulación de paquetes con `arp-scan`.*
 
 **Paso 1: Fundamentos de la CLI y Gestión de Objetivos**
 *   [✅] **Ayuda y Versión**: `--help (-h)` y `--version (-V)`.
@@ -218,7 +262,6 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Especificación de Objetivos**: Soporte para IPs, rangos (`1.2.3.4-5.6.7.8`) y notación CIDR (`1.2.3.0/24`).
 *   [✅] **Objetivos desde Fichero**: `--file (-f)`.
 *   [✅] **Escaneo de Red Local**: `--localnet`.
-*   [✅] **Resolución de Nombres (DNS)**: Habilitada por defecto, desactivable con `--numeric (-N)`.
 
 **Paso 2: Control del Escaneo y Paquetes**
 *   [✅] **Auto-detección de Interfaz**: Selección automática de la mejor interfaz de red.
@@ -239,60 +282,41 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Detección de Dispositivos Multi-IP**: Muestra `(Multi-IP)`.
 *   [✅] **Ignorar Duplicados**: `--ignoredups (-g)`.
 *   [✅] **Modos de Salida para Scripting**: `--quiet (-q)` para IP/MAC y `--plain (-x)` para salida sin cabeceras/pies.
-
-### ✅ Fase 3: Manipulación Avanzada de Paquetes (Paridad de "Power-User") (COMPLETADO)
-
-*Objetivo: Implementar el arsenal completo de manipulación de paquetes de arp-scan para atraer a los usuarios avanzados, pentesters y administradores de red.*
-
-**Paso 3.1: Opciones de Red Esenciales (Alto Impacto)**
-*   [✅] `--vlan=<i>`, `-Q <i>`: Esencial para escanear redes corporativas segmentadas.
-*   [✅] `--snap=<i>`, `-n <i>`: Controlar el `snaplen`. Complemento crucial para `--pcapsavefile`.
-
-**Paso 3.2: Spoofing y Manipulación ARP (Impacto Medio)**
-*   [✅] `--srcaddr=<m>`, `-S <m>`: Modificar la MAC de origen de la trama Ethernet.
-*   [✅] `--arpsha=<m>`, `-u <m>`: Modificar la MAC de origen dentro del paquete ARP.
-*   [✅] `--arpop=<i>`, `-o <i>`: Cambiar el código de operación ARP (Request/Reply).
-*   [✅] `--arpspa=dest`: Añadir el soporte para el valor especial `"dest"` en la IP de origen.
-
-**Paso 3.3: Paridad Completa y Opciones de Nicho (Bajo Impacto)**
-*   [✅] **Manipulación de Trama Ethernet (Destino)**: `--destaddr=<m>, -T <m>`.
-*   [✅] **Manipulación de Campos ARP (Destino)**: `--arptha=<m>, -w <m>`.
-*   [✅] **Manipulación de Trama Ethernet (Protocolo)**: `--prototype=<i>`, `-y <i>`.
-*   [✅] **Manipulación de Campos ARP (Otros)**: `--arphrd=<i> (-H)`, `--arppro=<i> (-p)`, `--arphln=<i> (-a)`, `--arppln=<i> (-P)`.
-*   [✅] **Framing y Datos Adicionales**: `--padding=<h> (-A)`, `--llc (-L)`.
-
-**Paso 3.4: Paridad de Aliases (Calidad de Vida)**
-*   [✅] Añadir el alias `-s` para `--arpspa`.
-
-### ✅ Fase 4: Integración con el Ecosistema Moderno (COMPLETADO)
-
-*Objetivo: Hacer que go-arpscan no solo sea una herramienta, sino una pieza integrable en flujos de trabajo automatizados.*
-
-**Paso 4.1: Salida Estructurada e Interoperabilidad**
-*   [✅] **Salida Estructurada JSON**: `--json`.
-*   [✅] **Salida Estructurada CSV**: `--csv`.
+*   [✅] **Salida Estructurada**: `--json`, `--csv`.
 *   [✅] **Guardado de Captura PCAP**: `--pcapsavefile (-W)`.
 
-### [🔲] Fase 5: Funcionalidades Visionarias y de Gestión de Red
+**Paso 4: Paridad Completa de Manipulación de Paquetes ("Power-User")**
+*   [✅] **VLAN Tagging**: `--vlan (-Q)`.
+*   [✅] **Control de `snaplen`**: `--snap (-n)`.
+*   [✅] **Spoofing de Trama Ethernet**: `--srcaddr (-S)`, `--destaddr (-T)`, `--prototype (-y)`.
+*   [✅] **Spoofing de Paquete ARP**: `--arpsha (-u)`, `--arptha (-w)`, `--arpop (-o)`.
+*   [✅] **Manipulación de Campos ARP**: `--arphrd (-H)`, `--arppro (-p)`, `--arphln (-a)`, `--arppln (-P)`.
+*   [✅] **Framing y Datos Adicionales**: `--padding (-A)`, `--llc (-L)`.
+
+### ✅ Fase 5: Gestión de Red y Calidad de Vida (COMPLETADO)
 
 *Objetivo: Evolucionar `go-arpscan` de una herramienta de descubrimiento a una utilidad de monitorización y gestión de red, diseñada para administradores de sistemas.*
 
-**Paso 5.1: Monitorización Continua y Detección de Amenazas**
+**Paso 5.1: Gestión de Estado y Control de Cambios**
+*   [✅] **Guardado de Estado (`--state-file`)**: Guardar los resultados de un escaneo en un fichero de estado (JSON) para su posterior análisis.
+*   [✅] **Comparación de Red (`--diff`)**: Realizar un nuevo escaneo y compararlo con un fichero de estado previo para reportar cambios: hosts añadidos, eliminados o modificados.
+
+**Paso 5.2: Calidad de Vida y Usabilidad Avanzada**
+*   [✅] **Barra de Progreso (`--progress`)**: Muestra una barra de progreso informativa durante los escaneos para mejorar la experiencia de usuario.
+*   [✅] **Fichero de Configuración (`--config`)**: Soportar un fichero de configuración (e.g., `~/.go-arpscan.yaml`) para establecer opciones por defecto y simplificar la ejecución de comandos recurrentes.
+
+### [🔲] Fase 6: Funcionalidades Futuras (Visión)
+
+*Objetivo: Añadir capacidades de monitorización activa y enriquecimiento de datos para convertir `go-arpscan` en una herramienta de inteligencia de red más completa.*
+
+**Paso 6.1: Monitorización Continua y Detección de Amenazas**
 *   [🔲] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva (Gratuitous ARP) con sondeos activos periódicos.
     *   **Salida de Eventos**: Generar logs estructurados en JSON en tiempo real para eventos como `NEW_HOST`, `IP_CONFLICT` y `HOST_DISAPPEARED`.
     *   **Detección de ARP Spoofing**: Añadir heurísticas para detectar "MAC Flapping" (cambios rápidos de MAC para una misma IP) y alertar sobre posibles ataques.
 
-**Paso 5.2: Gestión de Estado y Control de Cambios**
-*   [✅] **Guardado de Estado (`--state-file`)**: Guardar los resultados de un escaneo en un fichero de estado (JSON) para su posterior análisis.
-*   [✅] **Comparación de Red (`--diff`)**: Realizar un nuevo escaneo y compararlo con un fichero de estado previo para reportar cambios: hosts añadidos, eliminados o modificados.
-
-**Paso 5.3: Calidad de Vida y Usabilidad Avanzada**
-*   [✅] **Barra de Progreso (`--progress`)**: Muestra una barra de progreso informativa durante los escaneos para mejorar la experiencia de usuario.
-*   [🔲] **Fichero de Configuración (`--config`)**: Soportar un fichero de configuración (e.g., `~/.go-arpscan.yaml`) para establecer opciones por defecto y simplificar la ejecución de comandos recurrentes.
-*   [🔲] **Enriquecimiento de Datos**: Añadir flags opcionales para realizar acciones adicionales sobre los hosts descubiertos:
-    *   `--resolve-names`: Realizar una búsqueda de DNS inversa (PTR) para obtener los nombres de host.
-    *   `--probe-ports <ports>`: Realizar un sondeo TCP rápido en puertos comunes (e.g., 80, 443, 22) para inferir el tipo de servicio.
-
+**Paso 6.2: Enriquecimiento de Datos**
+*   [🔲] **Resolución de Nombres Inversa**: Añadir flag `--resolve-names` para realizar una búsqueda de DNS inversa (PTR) y obtener los nombres de host de las IPs descubiertas.
+*   [🔲] **Sondeo de Puertos Básico**: Añadir flag `--probe-ports <ports>` para realizar un sondeo TCP rápido en puertos comunes (e.g., 80, 443, 22) para inferir el tipo de servicio.
 
 ## Agradecimientos
 
