@@ -1,14 +1,15 @@
 # go-arpscan
 
-Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado en el clásico `arp-scan` pero con mejoras de usabilidad y diagnóstico.
+Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado en el clásico `arp-scan` pero con mejoras de usabilidad, diagnóstico y capacidades de seguridad ofensiva.
 
 ## Descripción
 
-`go-arpscan` envía paquetes ARP a los hosts de la red local para descubrir dispositivos activos y recopilar sus direcciones IP y MAC. Aprovecha la concurrencia de Go para escanear redes de forma extremadamente rápida, incluso con un gran número de hosts.
+`go-arpscan` envía paquetes ARP a los hosts de la red local para descubrir dispositivos activos, recopilar sus direcciones IP y MAC, e incluso realizar ataques de suplantación para auditorías de seguridad. Aprovecha la concurrencia de Go para escanear redes de forma extremadamente rápida, incluso con un gran número de hosts.
 
 ## Características Principales
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
+*   ⚔️ **Módulo de Ataque Man-in-the-Middle**: Realiza ataques de suplantación ARP (`--spoof`) para interceptar tráfico entre dos objetivos, con gestión automática del reenvío de paquetes y limpieza segura.
 *   ✨ **Auto-Detección Inteligente**: Detecta automáticamente la interfaz de red a utilizar si no se especifica una.
 *   ⚙️ **Gestión Centralizada con Ficheros de Configuración**:
     *   **Preferencias Personales (`config.yaml`)**: Define tus opciones por defecto (interfaz, timeouts, etc.) para simplificar la ejecución de comandos recurrentes.
@@ -42,7 +43,7 @@ cd go-arpscan
 
 # 2. Compila el binario
 # (El flag -ldflags inyecta el número de versión)
-go build -ldflags "-X main.version=1.0.0" -o go-arpscan ./cmd/go-arpscan
+go build -ldflags "-X main.version=1.1.0" -o go-arpscan ./cmd/go-arpscan
 
 # 3. (Opcional) Mueve el binario a tu PATH para un acceso global
 sudo mv go-arpscan /usr/local/bin/
@@ -51,6 +52,8 @@ sudo mv go-arpscan /usr/local/bin/
 **Nota**: `go-arpscan` necesita privilegios de `root` para funcionar, ya que accede a funcionalidades de red a bajo nivel. Utilízalo siempre con `sudo`.
 
 ## Uso Básico y Ejemplos
+
+### Descubrimiento y Escaneo
 
 ```bash
 # Escanear la red local automáticamente detectada con una barra de progreso
@@ -84,6 +87,17 @@ sudo ./go-arpscan --localnet --state-file network_baseline.json
 # Se mostrarán los hosts añadidos, eliminados o cuya MAC ha cambiado.
 sudo ./go-arpscan --localnet --diff --state-file network_baseline.json --progress
 ```
+
+### Explotación Activa (Ataque Man-in-the-Middle)
+
+**ADVERTENCIA:** Usa esta funcionalidad de forma ética y solo en redes para las que tengas permiso explícito.
+
+```bash
+# Interceptar el tráfico entre el host 192.168.1.100 y el gateway 192.168.1.1
+# La herramienta gestiona el reenvío de paquetes para que la víctima no pierda la conexión.
+sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1
+```
+*En otra terminal, puedes usar `wireshark` o `tcpdump` para ver el tráfico interceptado en la interfaz `eno1`.*
 
 ## Ficheros de Configuración
 
@@ -172,6 +186,10 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | | `--interval` | `duration` | Intervalo mínimo entre el envío de paquetes. | `1ms` |
 | `-B` | `--bandwidth` | `string` | Ancho de banda de salida deseado (e.g., `1M`, `256k`). | `""` |
 | `-b` | `--backoff` | `float` | Factor por el que se multiplica el timeout en cada reintento. | `1.5` |
+| | **--- Explotación Activa ---** | | | |
+| | `--spoof` | `string` | Activa el modo de suplantación ARP contra una IP objetivo. | `""` |
+| | `--gateway` | `string` | Especifica la IP del gateway para el ataque de suplantación (`--spoof`). | `""` |
+| | **--- Manipulación de Paquetes ---** | | | |
 | `-s` | `--arpspa` | `string` | Dirección IP de origen a usar en los paquetes ARP. | IP de la interfaz |
 | `-u` | `--arpsha` | `string` | Dirección MAC de origen a usar en el paquete ARP (SHA). | MAC de la interfaz |
 | `-S` | `--srcaddr` | `string` | Dirección MAC de origen a usar en la trama Ethernet. | MAC de la interfaz |
@@ -185,6 +203,7 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | `-P` | `--arppln` | `int` | Establece la longitud de la dirección de protocolo (ar$pln). | `4` |
 | `-A` | `--padding` | `string` | Añade datos de relleno (padding) en formato hexadecimal `<h>`. | `""` |
 | `-L` | `--llc` | `bool` | Usa framing RFC 1042 LLC con SNAP. | `false` |
+| | **--- Ficheros y Formato ---** | | | |
 | `-O` | `--ouifile` | `string` | Fichero de mapeo OUI personalizado. | `oui.txt` |
 | | `--iabfile` | `string` | Fichero de mapeo IAB personalizado. | `iab.txt` |
 | | `--macfile` | `string` | Fichero de mapeo MAC personalizado. | `""` |
@@ -199,6 +218,7 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | `-W` | `--pcapsavefile`| `string` | Guardar respuestas ARP (ARP Reply) en un fichero pcap `<s>` para análisis en Wireshark. | `""` |
 | `-g` | `--ignoredups` | `bool` | No mostrar respuestas duplicadas. | `false` |
 | | `--color` | `string` | Controlar el uso de color en la salida (`auto`, `on`, `off`). | `auto` |
+| | **--- Varios ---** | | | |
 | `-R` | `--random` | `bool` | Aleatorizar el orden de los hosts a escanear. | `false` |
 | | `--randomseed` | `int64` | Semilla para el generador de números aleatorios. | Basada en el tiempo |
 | `-Q` | `--vlan` | `int` | Especifica el ID de VLAN 802.1Q `<i>` (1-4094). | `0` |
@@ -227,6 +247,8 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | Factor de Backoff | `--backoff=<f>`, `-b <f>` | `--backoff=<f>`, `-b <f>` | ✅ **Implementado**. |
 | Aleatorizar Objetivos | `--random`, `-R` | `--random`, `-R` | ✅ **Implementado**. |
 | Semilla Aleatoria | `--randomseed=<i>` | `--randomseed=<i>` | ✅ **Implementado**. |
+| **Capacidades Ofensivas** | | | |
+| Suplantación ARP (MitM) | *(No disponible)* | `--spoof`, `--gateway` | 💡 **Nuevo**. Permite realizar ataques de Man-in-the-Middle. |
 | **Formato de Salida** | | | |
 | Salida Mínima | `--quiet`, `-q` | `--quiet`, `-q` | ✅ **Implementado**. |
 | Salida Simple para Scripts | `--plain`, `-x` | `--plain`, `-x` | ✅ **Implementado**. |
@@ -317,7 +339,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Barra de Progreso (`--progress`)**: Muestra una barra de progreso informativa durante los escaneos para mejorar la experiencia de usuario.
 *   [✅] **Fichero de Configuración (`--config`)**: Soportar un fichero de configuración (e.g., `~/.go-arpscan.yaml`) para establecer opciones por defecto y simplificar la ejecución de comandos recurrentes.
 
-### [🔲] Fase 6: Capacidades Avanzadas de Seguridad Ofensiva y Evasión
+### 🚧 Fase 6: Capacidades Avanzadas de Seguridad Ofensiva y Evasión (EN CURSO)
 
 *Objetivo: Evolucionar `go-arpscan` a una herramienta de élite para pentesters y equipos de seguridad, añadiendo inteligencia activa, capacidades de evasión y un arsenal de tácticas de ataque y mimetismo reutilizables.*
 
@@ -329,9 +351,9 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
     *   `--probe-iot-ports`: Un alias para escanear puertos estándar de protocolos IoT/OT (ej. `1883/MQTT`, `5683/CoAP`, `502/Modbus`), crucial para identificar infraestructura de control.
 
 **Paso 6.2: Explotación Activa (Controlled Attack Module)**
-*   [🔲] **Ataque de Suplantación ARP (`--spoof`)**: Implementar un módulo de ataque para realizar envenenamiento de caché ARP (ARP poisoning) y facilitar ataques de intermediario (Man-in-the-Middle).
+*   [✅] **Ataque de Suplantación ARP (`--spoof`)**: Implementar un módulo de ataque para realizar envenenamiento de caché ARP (ARP poisoning) y facilitar ataques de intermediario (Man-in-the-Middle).
     *   **Sintaxis de la Operación**: `go-arpscan --spoof <IP_objetivo> --gateway <IP_gateway>`.
-    *   **Funcionamiento Profesional**: La herramienta gestionará la activación de `ip_forwarding` para asegurar que el ataque no sea destructivo (un MitM funcional en lugar de un DoS), demostrando un control preciso del entorno.
+    *   **Funcionamiento Profesional**: La herramienta gestiona la activación de `ip_forwarding` para asegurar que el ataque no sea destructivo (un MitM funcional en lugar de un DoS), demostrando un control preciso del entorno.
     *   **Impacto de Seguridad**: Permite demostrar riesgos críticos como el robo de credenciales en texto plano (HTTP, FTP), secuestro de cookies de sesión y la interceptación de datos sensibles.
 
 **Paso 6.3: Evasión y Mimetismo Táctico: Perfiles de Fingerprint**
