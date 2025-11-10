@@ -10,7 +10,9 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
 *   ✨ **Auto-Detección Inteligente**: Detecta automáticamente la interfaz de red a utilizar si no se especifica una.
-*   ⚙️ **Gestión Centralizada con Fichero de Configuración**: Define perfiles de escaneo y opciones por defecto en un fichero YAML (`--config`) para simplificar la ejecución de comandos recurrentes.
+*   ⚙️ **Gestión Centralizada con Ficheros de Configuración**:
+    *   **Preferencias Personales (`config.yaml`)**: Define tus opciones por defecto (interfaz, timeouts, etc.) para simplificar la ejecución de comandos recurrentes.
+    *   **Perfiles Tácticos (`profiles.yaml`)**: Activa conjuntos complejos de parámetros para mimetismo, evasión o pruebas de seguridad con un solo flag (`--profile <nombre>`).
 *   📊 **Auditoría de Red**: Guarda instantáneas del estado de la red y compara escaneos para detectar dispositivos nuevos, eliminados o modificados (`--diff`).
 *   🎨 **Salida Coloreada y Alineada**: Formato de salida moderno y legible, con control total sobre los colores (`--color=auto|on|off`).
 *   📜 **Salida Estructurada**: Soporte nativo para `--json` y `--csv`, facilitando la integración con scripts y herramientas de análisis.
@@ -60,17 +62,14 @@ sudo ./go-arpscan -i eno1 192.168.24.0/24
 # Escanear un rango, mostrar RTT y guardar las respuestas para análisis en Wireshark
 sudo ./go-arpscan -i eno1 -D -W scan_results.pcap 192.168.24.1-192.168.24.100
 
-# Leer objetivos desde un fichero, con salida simple para procesar con otros scripts
-sudo ./go-arpscan -f hosts.txt -x
+# Usar un perfil táctico para un escaneo sigiloso, evadiendo la detección
+sudo ./go-arpscan --profile stealth-scan-generic --localnet
 
 # Obtener los resultados en formato JSON y procesarlos con jq
 sudo ./go-arpscan --localnet --json | jq '.results[] | {ip, mac, vendor}'
 
 # Guardar los resultados en un fichero CSV para analizarlos en una hoja de cálculo
 sudo ./go-arpscan --localnet --csv > network_scan.csv
-
-# Usar un fichero de configuración para definir opciones por defecto y ejecutar un escaneo
-sudo ./go-arpscan --config=perfil_rapido.yaml --localnet
 ```
 
 ### Auditoría y Detección de Cambios
@@ -86,19 +85,24 @@ sudo ./go-arpscan --localnet --state-file network_baseline.json
 sudo ./go-arpscan --localnet --diff --state-file network_baseline.json --progress
 ```
 
-## Fichero de Configuración
+## Ficheros de Configuración
 
-`go-arpscan` soporta el uso de un fichero de configuración en formato YAML para establecer valores por defecto, simplificando la ejecución de escaneos recurrentes.
+`go-arpscan` soporta el uso de ficheros de configuración en formato YAML para establecer valores por defecto, simplificando la ejecución de escaneos recurrentes.
 
-**Prioridad**: Los flags especificados en la línea de comandos siempre anularán los valores del fichero de configuración.
+**Prioridad de Configuración (de menor a mayor):**
+1.  Valores por defecto del programa.
+2.  Valores en `config.yaml`.
+3.  Valores del perfil activado con `--profile` (desde `profiles.yaml`).
+4.  Flags especificados en la línea de comandos (siempre tienen la última palabra).
 
-**Ubicación**:
-1.  La ruta especificada con el flag `--config <ruta>`.
-2.  Si no se usa `--config`, se buscará en `~/.config/go-arpscan/config.yaml`.
+### 1. Fichero de Preferencias (`config.yaml`)
 
-Puedes usar el fichero `config.complete.yaml` del repositorio como plantilla.
+Este fichero es para tus **preferencias personales y por defecto**.
 
-**Ejemplo de `~/.config/go-arpscan/config.yaml`**:
+**Ubicación por defecto**: `~/.config/go-arpscan/config.yaml`.
+Se puede especificar una ruta personalizada con `--config <ruta>`.
+
+**Ejemplo de `config.yaml`**:
 ```yaml
 # Establecer 'eno1' como mi interfaz de red por defecto
 interface: "eno1"
@@ -108,14 +112,19 @@ ui:
   progress: true
 output:
   rtt: true
-
-# Usar un perfil de escaneo más agresivo por defecto
-scan:
-  retry: 3
-  host-timeout: "250ms"
-  bandwidth: "2M"
 ```
-Con esta configuración, el comando `sudo go-arpscan --localnet` se ejecutará usando `eno1`, con 3 reintentos, un timeout de 250ms, un ancho de banda de 2Mbit/s y mostrará la barra de progreso y el RTT sin necesidad de especificarlo cada vez.
+
+### 2. Fichero de Perfiles Tácticos (`profiles.yaml`)
+
+Este fichero define **conjuntos de parámetros reutilizables** para escenarios específicos (mimetismo, evasión, pruebas, etc.), que se activan con el flag `--profile <nombre>`.
+
+**Ubicación y Búsqueda (se usará el primero que se encuentre):**
+1.  La ruta especificada con el flag `--profiles <ruta>`.
+2.  `profiles.yaml` en el directorio de trabajo actual.
+3.  `profiles.yaml` en el mismo directorio que el fichero de configuración (`--config`).
+4.  La ruta por defecto: `~/.config/go-arpscan/profiles.yaml`.
+
+Puedes usar los ficheros `config.complete.yaml` y `profiles.yaml` del repositorio como plantillas.
 
 ### Ejemplo de Salida
 ```
@@ -150,9 +159,11 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | Flag Corto | Flag Largo | Tipo | Descripción | Por Defecto |
 | :---: | :--- | :--- | :--- | :--- |
 | `-h` | `--help` | `bool` | Muestra el mensaje de ayuda y sale. | `false` |
-| | `--config` | `string` | Ruta al fichero de configuración YAML. | `~/.config/go-arpscan/config.yaml` |
+| | `--config` | `string` | Ruta al fichero de configuración YAML (`config.yaml`). | `~/.config/...` |
+| | `--profiles` | `string` | Ruta al fichero de perfiles YAML (`profiles.yaml`). | Búsqueda automática |
+| | `--profile` | `string` | Activa un perfil táctico desde el fichero de perfiles. | `""` |
 | `-i` | `--interface` | `string` | Interfaz de red a utilizar. | Auto-detectada |
-| | `--scan-timeout`| `duration` | Timeout global para todo el escaneo. | Calculado automáticamente |
+| | `--scan-timeout`| `duration` | Timeout global para todo el escaneo. | Calculado |
 | | `--localnet` | `bool` | Escanear la red local de la interfaz. | `false` |
 | `-f` | `--file` | `string` | Leer objetivos desde un fichero (usar `-` para stdin). | `""` |
 | `-N` | `--numeric` | `bool` | No realizar resolución de nombres de host (DNS). | `false` |
@@ -226,9 +237,10 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | Salida CSV | *(No disponible)* | `--csv` | 💡 **Nuevo**. Facilita el análisis de datos en hojas de cálculo. |
 | Salida Coloreada | *(No disponible)* | `--color=<auto\|on\|off>` | 💡 **Nuevo**. Mejora la legibilidad de la salida por defecto. |
 | **Integración y Usabilidad** | | | |
-| Fichero de Configuración | *(No disponible)* | `--config=<s>` | 💡 **Nuevo**. Permite definir opciones por defecto en un fichero YAML, ideal para perfiles de escaneo recurrentes. |
+| Fichero de Configuración | *(No disponible)* | `--config=<s>` | 💡 **Nuevo**. Permite definir opciones por defecto en un fichero YAML. |
+| Perfiles Tácticos | *(No disponible)* | `--profile=<s>` | 💡 **Nuevo**. Activa conjuntos de parámetros predefinidos para mimetismo, evasión, etc. |
 | Barra de Progreso | *(No disponible)* | `--progress` | 💡 **Nuevo**. Feedback visual inmediato en escaneos largos. |
-| Auditoría de Red | *(No disponible)* | `--state-file`, `--diff` | 💡 **Nuevo**. Permite guardar y comparar escaneos para detectar cambios en la red a lo largo del tiempo. |
+| Auditoría de Red | *(No disponible)* | `--state-file`, `--diff` | 💡 **Nuevo**. Permite guardar y comparar escaneos para detectar cambios en la red. |
 | **Manipulación de Paquetes** | | | |
 | Fichero OUI | `--ouifile=<s>`, `-O <s>` | `--ouifile=<s>`, `-O <s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente si no existe. |
 | Fichero IAB | `--iabfile=<s>` | `--iabfile=<s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente. |
@@ -323,7 +335,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
     *   **Impacto de Seguridad**: Permite demostrar riesgos críticos como el robo de credenciales en texto plano (HTTP, FTP), secuestro de cookies de sesión y la interceptación de datos sensibles.
 
 **Paso 6.3: Evasión y Mimetismo Táctico: Perfiles de Fingerprint**
-*   [🔲] **Implementación de Perfiles (`--profile <nombre>`)**: Añadir la capacidad de cargar conjuntos de parámetros predefinidos desde un fichero de configuración (`profiles.yaml`). Esta característica encapsula tácticas complejas en un solo flag, permitiendo automatizar el engaño y la evasión. A continuación se detallan los perfiles iniciales que se implementarían:
+*   [✅] **Implementación de Perfiles (`--profile <nombre>`)**: Añadir la capacidad de cargar conjuntos de parámetros predefinidos desde un fichero de configuración (`profiles.yaml`). Esta característica encapsula tácticas complejas en un solo flag, permitiendo automatizar el engaño y la evasión. A continuación se detallan los perfiles iniciales que se implementarían:
     *   **Perfil: `windows11-workstation` (Mimetismo)**
     *   **Perfil: `macos-ventura` (Mimetismo)**
     *   **Perfil: `hp-officejet-printer` (Engaño)**

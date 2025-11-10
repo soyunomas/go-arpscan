@@ -28,7 +28,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// --- INICIO: NUEVAS ESTRUCTURAS PARA EL FICHERO DE CONFIGURACIÓN ---
+// --- INICIO: ESTRUCTURAS PARA EL FICHERO DE CONFIGURACIÓN Y PERFILES ---
 
 // AppConfig es la estructura raíz que mapea el fichero de configuración YAML.
 type AppConfig struct {
@@ -91,7 +91,28 @@ type FilePaths struct {
 	MACFile string `yaml:"macfile"`
 }
 
-// --- FIN: NUEVAS ESTRUCTURAS ---
+// ProfilesFile es la estructura raíz para el fichero profiles.yaml
+type ProfilesFile struct {
+	Profiles map[string]ProfileConfig `yaml:"profiles"`
+}
+
+// ProfileConfig contiene los parámetros para un único perfil táctico.
+// Su estructura es plana para facilitar la definición en YAML.
+type ProfileConfig struct {
+	Description   string        `yaml:"description"`
+	ArpSHA        string        `yaml:"arpsha"`
+	EthSrcMAC     string        `yaml:"srcaddr"`
+	HostTimeout   time.Duration `yaml:"host-timeout"`
+	Retry         int           `yaml:"retry"`
+	BackoffFactor float64       `yaml:"backoff"`
+	Bandwidth     string        `yaml:"bandwidth"`
+	LLC           bool          `yaml:"llc"`
+	Random        bool          `yaml:"random"`
+	ArpOpCode     int           `yaml:"arpop"`
+	Padding       string        `yaml:"padding"`
+}
+
+// --- FIN: ESTRUCTURAS ---
 
 const (
 	ouiFileDefaultName  = "oui.txt"
@@ -106,50 +127,52 @@ var (
 	version = "dev"
 
 	// Flags
-	configFilePath string // <-- NUEVO FLAG
-	ifaceName      string
-	filePath       string
-	scanTimeout    time.Duration
-	hostTimeout    time.Duration
-	retry          int
-	interval       time.Duration
-	backoffFactor  float64
-	arpSPA         string
-	arpSHA         string
-	ethSrcMAC      string
-	arpOpCode      int
-	ethDstMAC      string
-	arpTHA         string
-	ethPrototype   string
-	arpHrd         int
-	arpPro         string
-	arpHln         int
-	arpPln         int
-	paddingHex     string
-	useLLC         bool
-	quiet          bool
-	plain          bool
-	jsonOutput     bool
-	csvOutput      bool
-	showRTT        bool
-	random         bool
-	randomSeed     int64
-	bandwidth      string
-	verboseCount   int
-	versionFlag    bool
-	ouiFilePath    string
-	iabFilePath    string
-	macFilePath    string
-	numeric        bool
-	useLocalnet    bool
-	ignoreDups     bool
-	colorMode      string
-	pcapSaveFile   string
-	vlanID         int
-	snaplen        int
-	stateFilePath  string
-	diffMode       bool
-	showProgress   bool
+	configFilePath   string
+	profilesFilePath string // <-- NUEVO FLAG
+	profileName      string
+	ifaceName        string
+	filePath         string
+	scanTimeout      time.Duration
+	hostTimeout      time.Duration
+	retry            int
+	interval         time.Duration
+	backoffFactor    float64
+	arpSPA           string
+	arpSHA           string
+	ethSrcMAC        string
+	arpOpCode        int
+	ethDstMAC        string
+	arpTHA           string
+	ethPrototype     string
+	arpHrd           int
+	arpPro           string
+	arpHln           int
+	arpPln           int
+	paddingHex       string
+	useLLC           bool
+	quiet            bool
+	plain            bool
+	jsonOutput       bool
+	csvOutput        bool
+	showRTT          bool
+	random           bool
+	randomSeed       int64
+	bandwidth        string
+	verboseCount     int
+	versionFlag      bool
+	ouiFilePath      string
+	iabFilePath      string
+	macFilePath      string
+	numeric          bool
+	useLocalnet      bool
+	ignoreDups       bool
+	colorMode        string
+	pcapSaveFile     string
+	vlanID           int
+	snaplen          int
+	stateFilePath    string
+	diffMode         bool
+	showProgress     bool
 )
 
 var rootCmd = &cobra.Command{
@@ -161,15 +184,16 @@ Los hosts de destino deben especificarse en la línea de comandos a menos que se
 en cuyo caso los destinos se leen desde el archivo especificado, o si se usa la opción --localnet,
 en cuyo caso los destinos se generan a partir de la dirección IP y la máscara de red de la interfaz.
 
-Las opciones pueden especificarse en un fichero de configuración (e.g., ~/.config/go-arpscan/config.yaml).
-Los flags de la línea de comandos siempre tienen prioridad sobre los valores del fichero de configuración.
+Las opciones se pueden definir en ficheros de configuración y perfiles.
+La prioridad es: Flags > Perfil > Configuración > Defaults.
 
 Es necesario ejecutar go-arpscan como root.`,
 	Example: `  sudo ./go-arpscan --localnet --progress
   sudo ./go-arpscan -i eth0 192.168.1.0/24
   sudo ./go-arpscan -i eth0 192.168.1.1-192.168.1.254
   sudo ./go-arpscan --file=hostlist.txt --json
-  sudo ./go-arpscan --config=mi_perfil.yaml --localnet`,
+  sudo ./go-arpscan --config=mi_perfil.yaml --localnet
+  sudo ./go-arpscan --profile=stealth-scan-generic --localnet`,
 	PersistentPreRun: initConfig,
 	Run: func(cmd *cobra.Command, args []string) {
 		if os.Geteuid() != 0 {
@@ -228,7 +252,9 @@ Es necesario ejecutar go-arpscan como root.`,
 				log.Fatalf("El ancho de banda no puede ser cero.")
 			}
 			interval = time.Duration(float64(effectivePacketBits) / float64(bitsPerSecond) * float64(time.Second))
-			log.Printf("Ancho de banda establecido en %s. Intervalo entre paquetes calculado: %v", bandwidth, interval)
+			if verboseCount > 0 && !isScriptingOutput() {
+				log.Printf("Ancho de banda establecido en %s. Intervalo entre paquetes calculado: %v", bandwidth, interval)
+			}
 		}
 
 		if vlanID != 0 && (vlanID < 1 || vlanID > 4094) {
@@ -430,8 +456,6 @@ Es necesario ejecutar go-arpscan como root.`,
 			log.Fatalf("Error cargando la base de datos de vendedores: %v", err)
 		}
 
-		isScriptingOutput := jsonOutput || csvOutput || plain || quiet
-
 		config := &scanner.Config{
 			Interface:         iface,
 			IPs:               ips,
@@ -461,7 +485,7 @@ Es necesario ejecutar go-arpscan como root.`,
 			Snaplen:           snaplen,
 		}
 
-		if !isScriptingOutput && stateFilePath == "" && !showProgress {
+		if !isScriptingOutput() && stateFilePath == "" && !showProgress {
 			log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
 			if config.VlanID > 0 {
 				log.Printf("Usando VLAN tag: %d", config.VlanID)
@@ -526,34 +550,24 @@ Es necesario ejecutar go-arpscan como root.`,
 			return
 		}
 
-		// <-- INICIO BLOQUE MODIFICADO: Lógica de decisión centralizada -->
-		// Decidimos si necesitamos recolectar resultados en memoria ANTES de imprimirlos.
-		// Esto es necesario para:
-		// 1. Salidas para scripting (json, csv, etc.) que requieren un formato completo.
-		// 2. Modo progreso (--progress) para evitar que la barra se corrompa con la salida.
-		// 3. Guardado de estado (--state-file) que necesita todos los resultados.
-		shouldBufferResults := isScriptingOutput || showProgress || stateFilePath != ""
+		shouldBufferResults := isScriptingOutput() || showProgress || stateFilePath != ""
 
 		if shouldBufferResults {
-			// Los logs de inicio se imprimen aquí para que aparezcan antes de la barra de progreso.
-			if !isScriptingOutput && stateFilePath == "" {
+			if !isScriptingOutput() && stateFilePath == "" {
 				log.Printf("Iniciando escaneo en la interfaz %s (%s)", config.Interface.Name, config.Interface.HardwareAddr)
 				log.Printf("Objetivos a escanear: %d IPs", len(config.IPs))
 			}
 
 			allResults := runScanAndCollect(config)
-			
+
 			if stateFilePath != "" {
 				saveStateToFile(allResults, stateFilePath)
-				// Si la única razón para bufferizar era guardar el estado (y no hay progreso o scripting), salimos.
-				if !showProgress && !isScriptingOutput {
+				if !showProgress && !isScriptingOutput() {
 					return
 				}
 			}
 
-			// Si no es una salida para script, significa que estamos aquí por --progress.
-			// Imprimimos la cabecera después de que la barra haya terminado.
-			if !isScriptingOutput {
+			if !isScriptingOutput() {
 				f := formatter.NewDefaultFormatter(showRTT)
 				f.PrintHeader()
 				for _, r := range allResults.Results {
@@ -561,68 +575,78 @@ Es necesario ejecutar go-arpscan como root.`,
 				}
 				f.PrintFooter(allResults.ConflictSummaries, allResults.MultiIPSummaries)
 			} else {
-				// Para scripting, usamos la función genérica.
-				printResults(allResults, isScriptingOutput)
+				printResults(allResults)
 			}
 		} else {
-			// Modo interactivo clásico: imprimir resultados en tiempo real.
 			runScanAndPrintRealTime(config)
 		}
-		// <-- FIN BLOQUE MODIFICADO -->
 
-		if !isScriptingOutput && stateFilePath == "" {
+		if !isScriptingOutput() && stateFilePath == "" {
 			log.Println("Escaneo completado.")
 		}
 	},
 }
 
-// --- INICIO: NUEVAS FUNCIONES PARA CARGAR CONFIGURACIÓN ---
+// --- INICIO: FUNCIONES MODIFICADAS Y NUEVAS PARA CARGAR CONFIGURACIÓN Y PERFILES ---
 
 func initConfig(cmd *cobra.Command, args []string) {
-	// 1. Manejar el flag de versión primero, ya que sale inmediatamente.
 	if versionFlag {
 		fmt.Printf("go-arpscan version %s\n", version)
 		os.Exit(0)
 	}
 
-	// 2. Encontrar y cargar el fichero de configuración.
+	// CAPA 1: Aplicar el fichero de configuración base (config.yaml)
 	cfgPath, err := findConfigFile()
-	if err != nil {
-		if verboseCount > 0 { // Solo mostrar advertencia si el usuario es verboso.
-			log.Printf("Advertencia: no se pudo buscar el fichero de configuración: %v", err)
-		}
+	if err != nil && verboseCount > 0 {
+		log.Printf("Advertencia: no se pudo buscar el fichero de configuración: %v", err)
 	}
-
 	if cfgPath != "" {
 		if _, err := os.Stat(cfgPath); err == nil {
 			data, err := os.ReadFile(cfgPath)
 			if err != nil {
 				log.Fatalf("Error leyendo el fichero de configuración %s: %v", cfgPath, err)
 			}
-
 			var cfg AppConfig
 			if err := yaml.Unmarshal(data, &cfg); err != nil {
 				log.Fatalf("Error parseando el fichero de configuración YAML %s: %v", cfgPath, err)
 			}
-
-			// 3. Aplicar los valores de la configuración a las variables de los flags,
-			//    SOLO si el flag correspondiente no fue establecido en la línea de comandos.
 			applyConfigDefaults(cmd, &cfg)
-
 		} else if cmd.Flags().Changed("config") {
-			// Es un error si el usuario especifica un fichero que no existe.
 			log.Fatalf("Error: el fichero de configuración especificado %s no se encontró.", cfgPath)
 		}
+	}
+
+	// CAPA 2: Aplicar el perfil táctico (profiles.yaml), si se especifica
+	if profileName != "" {
+		profilesPath, err := findProfilesFile()
+		if err != nil || profilesPath == "" {
+			log.Fatalf("Error: --profile '%s' especificado pero no se pudo encontrar el fichero profiles.yaml", profileName)
+		}
+		data, err := os.ReadFile(profilesPath)
+		if err != nil {
+			log.Fatalf("Error leyendo el fichero de perfiles %s: %v", profilesPath, err)
+		}
+		var profilesFile ProfilesFile
+		if err := yaml.Unmarshal(data, &profilesFile); err != nil {
+			log.Fatalf("Error parseando el fichero de perfiles YAML %s: %v", profilesPath, err)
+		}
+
+		profile, found := profilesFile.Profiles[profileName]
+		if !found {
+			log.Fatalf("Error: perfil '%s' no encontrado en %s", profileName, profilesPath)
+		}
+
+		if verboseCount > 0 {
+			log.Printf("Aplicando perfil '%s': %s", profileName, profile.Description)
+		}
+		applyProfileDefaults(cmd, &profile)
 	}
 }
 
 func findConfigFile() (string, error) {
-	// Prioridad 1: Flag --config
 	if configFilePath != "" {
 		return configFilePath, nil
 	}
-
-	// Prioridad 2: Directorio de configuración del usuario
 	usr, err := user.Current()
 	if err != nil {
 		return "", fmt.Errorf("no se pudo obtener el directorio del usuario actual: %w", err)
@@ -631,28 +655,61 @@ func findConfigFile() (string, error) {
 	if _, err := os.Stat(userConfigPath); err == nil {
 		return userConfigPath, nil
 	}
-
-	return "", nil // No se encontró ningún fichero de configuración
+	return "", nil
 }
 
+// findProfilesFile busca el fichero de perfiles con una precedencia clara.
+func findProfilesFile() (string, error) {
+	// 1. Flag explícito --profiles
+	if profilesFilePath != "" {
+		if _, err := os.Stat(profilesFilePath); err == nil {
+			return profilesFilePath, nil
+		}
+		return "", fmt.Errorf("el fichero de perfiles especificado '%s' no existe", profilesFilePath)
+	}
+
+	// 2. Directorio de trabajo actual
+	localPath := "profiles.yaml"
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath, nil
+	}
+
+	// 3. Junto al fichero de configuración (si se usó --config)
+	if configFilePath != "" {
+		dir := filepath.Dir(configFilePath)
+		path := filepath.Join(dir, "profiles.yaml")
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// 4. Directorio de configuración del usuario por defecto
+	usr, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("no se pudo obtener el directorio del usuario actual: %w", err)
+	}
+	userProfilesPath := filepath.Join(usr.HomeDir, ".config", "go-arpscan", "profiles.yaml")
+	if _, err := os.Stat(userProfilesPath); err == nil {
+		return userProfilesPath, nil
+	}
+
+	return "", nil // No se encontró ningún fichero
+}
+
+// applyConfigDefaults aplica valores desde AppConfig (config.yaml)
 func applyConfigDefaults(cmd *cobra.Command, cfg *AppConfig) {
-	// Preferencias Generales
 	if !cmd.Flags().Changed("interface") && cfg.Interface != "" {
 		ifaceName = cfg.Interface
 	}
 	if !cmd.Flags().Changed("verbose") && cfg.Verbose > 0 {
 		verboseCount = cfg.Verbose
 	}
-
-	// UI
 	if !cmd.Flags().Changed("color") && cfg.UI.Color != "" {
 		colorMode = cfg.UI.Color
 	}
 	if !cmd.Flags().Changed("progress") && cfg.UI.Progress {
 		showProgress = true
 	}
-
-	// Perfil de Escaneo
 	if !cmd.Flags().Changed("host-timeout") && cfg.Scan.HostTimeout > 0 {
 		hostTimeout = cfg.Scan.HostTimeout
 	}
@@ -674,16 +731,12 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *AppConfig) {
 	if !cmd.Flags().Changed("random") && cfg.Scan.Random {
 		random = true
 	}
-
-	// Formato de Salida
 	if !cmd.Flags().Changed("rtt") && cfg.Output.RTT {
 		showRTT = true
 	}
 	if !cmd.Flags().Changed("numeric") && cfg.Output.Numeric {
 		numeric = true
 	}
-
-	// Manejo especial para el formato de salida, ya que son mutuamente excluyentes.
 	formatFlagsSet := cmd.Flags().Changed("json") || cmd.Flags().Changed("csv") || cmd.Flags().Changed("plain") || cmd.Flags().Changed("quiet")
 	if !formatFlagsSet && cfg.Output.Format != "" {
 		switch strings.ToLower(cfg.Output.Format) {
@@ -697,8 +750,6 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *AppConfig) {
 			quiet = true
 		}
 	}
-
-	// Ficheros de Datos
 	if !cmd.Flags().Changed("ouifile") && cfg.Files.OUIFile != "" {
 		ouiFilePath = cfg.Files.OUIFile
 	}
@@ -708,8 +759,6 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *AppConfig) {
 	if !cmd.Flags().Changed("macfile") && cfg.Files.MACFile != "" {
 		macFilePath = cfg.Files.MACFile
 	}
-
-	// Avanzado
 	if !cmd.Flags().Changed("vlan") && cfg.Advanced.Vlan > 0 {
 		vlanID = cfg.Advanced.Vlan
 	}
@@ -757,7 +806,45 @@ func applyConfigDefaults(cmd *cobra.Command, cfg *AppConfig) {
 	}
 }
 
-// --- FIN: NUEVAS FUNCIONES ---
+// applyProfileDefaults aplica valores desde ProfileConfig (profiles.yaml)
+func applyProfileDefaults(cmd *cobra.Command, profile *ProfileConfig) {
+	if !cmd.Flags().Changed("arpsha") && profile.ArpSHA != "" {
+		arpSHA = profile.ArpSHA
+	}
+	if !cmd.Flags().Changed("srcaddr") && profile.EthSrcMAC != "" {
+		ethSrcMAC = profile.EthSrcMAC
+	}
+	if !cmd.Flags().Changed("host-timeout") && profile.HostTimeout > 0 {
+		hostTimeout = profile.HostTimeout
+	}
+	if !cmd.Flags().Changed("retry") && profile.Retry > 0 {
+		retry = profile.Retry
+	}
+	if !cmd.Flags().Changed("backoff") && profile.BackoffFactor > 0 {
+		backoffFactor = profile.BackoffFactor
+	}
+	if !cmd.Flags().Changed("bandwidth") && !cmd.Flags().Changed("interval") && profile.Bandwidth != "" {
+		bandwidth = profile.Bandwidth
+	}
+	if !cmd.Flags().Changed("llc") && profile.LLC {
+		useLLC = true
+	}
+	if !cmd.Flags().Changed("random") && profile.Random {
+		random = true
+	}
+	if !cmd.Flags().Changed("arpop") && profile.ArpOpCode > 0 {
+		arpOpCode = profile.ArpOpCode
+	}
+	if !cmd.Flags().Changed("padding") && profile.Padding != "" {
+		paddingHex = profile.Padding
+	}
+}
+
+// --- FIN: FUNCIONES DE CONFIGURACIÓN ---
+
+func isScriptingOutput() bool {
+	return jsonOutput || csvOutput || plain || quiet
+}
 
 func runScanAndPrintRealTime(config *scanner.Config) {
 	var f formatter.Formatter
@@ -781,10 +868,7 @@ func runScanAndPrintRealTime(config *scanner.Config) {
 
 func runScanAndCollect(config *scanner.Config) AnalyzedResults {
 	var bar *progressbar.ProgressBar
-	// La decisión de si mostrar la barra se toma aquí, basándose en el flag showProgress
-	// y asegurándonos de que no es una salida para scripting.
-	isScriptingOutput := jsonOutput || csvOutput || plain || quiet
-	if showProgress && !isScriptingOutput {
+	if showProgress && !isScriptingOutput() {
 		bar = progressbar.NewOptions(
 			len(config.IPs)*config.Retry,
 			progressbar.OptionSetWriter(os.Stderr),
@@ -951,7 +1035,7 @@ func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verb
 	}
 }
 
-func printResults(analyzed AnalyzedResults, isScriptingOutput bool) {
+func printResults(analyzed AnalyzedResults) {
 	var f formatter.Formatter
 	if jsonOutput {
 		f = formatter.NewJSONFormatter()
@@ -962,7 +1046,6 @@ func printResults(analyzed AnalyzedResults, isScriptingOutput bool) {
 	} else if plain {
 		f = formatter.NewPlainFormatter(showRTT)
 	} else {
-		// Este caso ahora es manejado fuera, pero lo dejamos como fallback.
 		f = formatter.NewDefaultFormatter(showRTT)
 	}
 
@@ -1009,6 +1092,8 @@ func init() {
 	rootCmd.Flags().SortFlags = false
 
 	rootCmd.PersistentFlags().StringVar(&configFilePath, "config", "", "Ruta al fichero de configuración YAML (por defecto ~/.config/go-arpscan/config.yaml).")
+	rootCmd.PersistentFlags().StringVar(&profilesFilePath, "profiles", "", "Ruta al fichero de perfiles YAML (busca en ./ y ~/.config/go-arpscan/).")
+	rootCmd.PersistentFlags().StringVar(&profileName, "profile", "", "Activa un perfil táctico desde el fichero de perfiles (e.g., 'stealth-scan-generic').")
 
 	rootCmd.PersistentFlags().StringVarP(&ifaceName, "interface", "i", "", "Usa la interfaz de red <s>. Si no se especifica, se auto-detecta.")
 	rootCmd.PersistentFlags().DurationVar(&scanTimeout, "scan-timeout", 20*time.Second, "Establece un timeout global de <d> para el escaneo completo.\n(calculado automáticamente si no se especifica)")
@@ -1041,7 +1126,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&useLLC, "llc", "L", false, "Usa framing RFC 1042 LLC con SNAP.")
 
 	rootCmd.Flags().StringVarP(&ouiFilePath, "ouifile", "O", "", "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
-	rootCmd.Flags().StringVar(&iabFilePath, "iabfile", "", "Usa el fichero de mapeo IAB de IEEE a vendor <a>.\nPor defecto, se busca 'iab.txt' y se descarga si no existe.")
+	rootCmd.Flags().StringVar(&iabFilePath, "iabfile", "", "Usa el fichero de mapeo IAB de IEEE a vendor a>.\nPor defecto, se busca 'iab.txt' y se descarga si no existe.")
 	rootCmd.Flags().StringVar(&macFilePath, "macfile", "", "Usa el fichero personalizado de mapeo MAC/prefijo a vendor s>.")
 
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Muestra solo salida mínima (IP y MAC).\nNo se realiza decodificación de protocolos y no se usan los ficheros de mapeo OUI.")
