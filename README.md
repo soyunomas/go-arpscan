@@ -16,6 +16,8 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
     *   **Preferencias Personales (`config.yaml`)**: Define tus opciones por defecto (interfaz, timeouts, etc.) para simplificar la ejecución de comandos recurrentes.
     *   **Perfiles Tácticos (`profiles.yaml`)**: Activa conjuntos complejos de parámetros para mimetismo, evasión o pruebas de seguridad con un solo flag (`--profile <nombre>`).
 *   📊 **Auditoría de Red**: Guarda instantáneas del estado de la red y compara escaneos para detectar dispositivos nuevos, eliminados o modificados (`--diff`).
+*   🎯 **Precisión Quirúrgica con Listas de Exclusión**: Evita el escaneo de sistemas críticos (`--exclude`, `--exclude-file`) para operar siempre dentro de las Reglas del Enfrentamiento.
+*   🔔 **Integración con Ecosistemas de SecOps (`--webhook-url`)**: Notifica eventos del modo monitor en tiempo real a Slack, plataformas SOAR o cualquier endpoint HTTP, con soporte para cabeceras de autenticación (`--webhook-header`).
 *   🎨 **Salida Coloreada y Alineada**: Formato de salida moderno y legible, con control total sobre los colores (`--color=auto|on|off`).
 *   📜 **Salida Estructurada**: Soporte nativo para `--json` y `--csv`, facilitando la integración con scripts y herramientas de análisis.
 *   🌐 **Gestión Automática de Vendors**: Descarga automáticamente los ficheros OUI e IAB de la IEEE si no se encuentran localmente.
@@ -63,6 +65,9 @@ sudo ./go-arpscan --localnet --progress
 # Escanear una subred completa usando notación CIDR y especificando la interfaz
 sudo ./go-arpscan -i eno1 192.168.24.0/24
 
+# Escanear una subred excluyendo el servidor de backups
+sudo ./go-arpscan 192.168.24.0/24 --exclude 192.168.24.10
+
 # Escanear un rango, mostrar RTT y guardar las respuestas para análisis en Wireshark
 sudo ./go-arpscan -i eno1 -D -W scan_results.pcap 192.168.24.1-192.168.24.100
 
@@ -89,13 +94,15 @@ sudo ./go-arpscan --localnet --state-file network_baseline.json
 sudo ./go-arpscan --localnet --diff --state-file network_baseline.json --progress
 ```
 
-### Monitorización Continua
+### Monitorización Continua e Integración con Webhooks
 
-Activa el modo `--monitor` para convertir `go-arpscan` en un sensor de red. La herramienta realizará un escaneo inicial y luego monitorizará el tráfico ARP y realizará sondeos periódicos para detectar cambios. La salida es una secuencia de eventos en formato JSON, ideal para ser procesada por otras herramientas como `jq` o enviada a un sistema de logging.
+Activa el modo `--monitor` para convertir `go-arpscan` en un sensor de red. La herramienta realizará un escaneo inicial y luego monitorizará el tráfico ARP y realizará sondeos periódicos para detectar cambios. La salida es una secuencia de eventos en formato JSON, ideal para ser procesada por otras herramientas.
 
 ```bash
-# Monitorizar la red local con sondeos activos cada 10 minutos
-sudo ./go-arpscan --localnet --monitor --monitor-interval 10m
+# Monitorizar la red local con sondeos activos cada 10 minutos y enviar alertas a un webhook
+sudo ./go-arpscan --localnet --monitor --monitor-interval 10m \
+  --webhook-url "https://hooks.slack.com/services/T000/B000/XXXX" \
+  --webhook-header "Content-Type: application/json"
 
 # Ejemplo de procesamiento de eventos en tiempo real con jq
 sudo ./go-arpscan --localnet --monitor | jq -r \
@@ -205,6 +212,8 @@ $ sudo ./go-arpscan --localnet --monitor
 | | `--scan-timeout`| `duration` | Timeout global para todo el escaneo. | Calculado |
 | | `--localnet` | `bool` | Escanear la red local de la interfaz. | `false` |
 | `-f` | `--file` | `string` | Leer objetivos desde un fichero (usar `-` para stdin). | `""` |
+| | `--exclude` | `stringSlice` | Excluye IPs o rangos CIDR del escaneo. | `nil` |
+| | `--exclude-file` | `string` | Excluye los objetivos listados en un fichero. | `""` |
 | `-N` | `--numeric` | `bool` | No realizar resolución de nombres de host (DNS). | `false` |
 | `-t` | `--host-timeout` | `duration` | Timeout inicial para el primer paquete enviado a un host. | `500ms` |
 | `-r` | `--retry` | `int` | Número total de intentos por host (1 = un paquete, sin reintentos). | `2` |
@@ -214,9 +223,12 @@ $ sudo ./go-arpscan --localnet --monitor
 | | **--- Explotación Activa ---** | | | |
 | | `--spoof` | `string` | Activa el modo de suplantación ARP contra una IP objetivo. | `""` |
 | | `--gateway` | `string` | Especifica la IP del gateway para el ataque de suplantación (`--spoof`). | `""` |
+| | `--detect-promisc` | `string` | Detecta si un host está en modo promiscuo. | `""` |
 | | **--- Monitorización Continua ---** | | | |
 | | `--monitor` | `bool` | Activa el modo monitor para detectar cambios en la red en tiempo real. | `false` |
 | | `--monitor-interval` | `duration` | Intervalo para los sondeos activos en modo monitor (e.g., '10m', '1h'). | `5m` |
+| | `--webhook-url` | `string` | URL del webhook para enviar eventos del modo monitor. | `""` |
+| | `--webhook-header`| `stringSlice`| Cabecera HTTP para la petición webhook (e.g., 'Auth: Bearer...'). | `nil` |
 | | **--- Manipulación de Paquetes ---** | | | |
 | `-s` | `--arpspa` | `string` | Dirección IP de origen a usar en los paquetes ARP. | IP de la interfaz |
 | `-u` | `--arpsha` | `string` | Dirección MAC de origen a usar en el paquete ARP (SHA). | MAC de la interfaz |
@@ -277,6 +289,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | Semilla Aleatoria | `--randomseed=<i>` | `--randomseed=<i>` | ✅ **Implementado**. |
 | **Capacidades Ofensivas** | | | |
 | Suplantación ARP (MitM) | *(No disponible)* | `--spoof`, `--gateway` | 💡 **Nuevo**. Permite realizar ataques de Man-in-the-Middle. |
+| Detección Modo Promiscuo | *(No disponible)* | `--detect-promisc` | 💡 **Nuevo**. Permite detectar sniffers en la red. |
 | **Formato de Salida** | | | |
 | Salida Mínima | `--quiet`, `-q` | `--quiet`, `-q` | ✅ **Implementado**. |
 | Salida Simple para Scripts | `--plain`, `-x` | `--plain`, `-x` | ✅ **Implementado**. |
@@ -292,6 +305,8 @@ $ sudo ./go-arpscan --localnet --monitor
 | Barra de Progreso | *(No disponible)* | `--progress` | 💡 **Nuevo**. Feedback visual inmediato en escaneos largos. |
 | Auditoría de Red | *(No disponible)* | `--state-file`, `--diff` | 💡 **Nuevo**. Permite guardar y comparar escaneos para detectar cambios en la red. |
 | Monitorización Continua | *(No disponible)* | `--monitor` | 💡 **Nuevo**. Opera como un sensor de red para la detección de cambios en tiempo real. |
+| Webhooks de Alerta | *(No disponible)* | `--webhook-url` | 💡 **Nuevo**. Conecta el modo monitor con sistemas de alerta y SOARs. |
+| Listas de Exclusión | *(No disponible)* | `--exclude`, `--exclude-file` | 💡 **Nuevo**. Permite un escaneo quirúrgico, evitando sistemas críticos. |
 | **Manipulación de Paquetes** | | | |
 | Fichero OUI | `--ouifile=<s>`, `-O <s>` | `--ouifile=<s>`, `-O <s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente si no existe. |
 | Fichero IAB | `--iabfile=<s>` | `--iabfile=<s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente. |
@@ -368,61 +383,30 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Barra de Progreso (`--progress`)**: Muestra una barra de progreso informativa durante los escaneos para mejorar la experiencia de usuario.
 *   [✅] **Fichero de Configuración (`--config`)**: Soportar un fichero de configuración (e.g., `~/.go-arpscan.yaml`) para establecer opciones por defecto y simplificar la ejecución de comandos recurrentes.
 
-### 🚧 Fase 6: Capacidades Avanzadas de Seguridad Ofensiva y Evasión (EN CURSO)
+### ✅ Fase 6: Capacidades Avanzadas de Seguridad Ofensiva y Evasión (COMPLETADO)
 
-*Objetivo: Evolucionar `go-arpscan` a una herramienta de élite para pentesters y equipos de seguridad, añadiendo inteligencia activa, capacidades de evasión y un arsenal de tácticas de ataque y mimetismo reutilizables.*
+*Objetivo: Evolucionar `go-arpscan` a una herramienta de élite para pentesters de redes internas, añadiendo inteligencia pasiva, capacidades de evasión y un arsenal de tácticas de ataque y mimetismo en Capa 2.*
 
-**Paso 6.1: Perfilado de Objetivos (Intelligence Gathering)**
-*   [🔲] **Huella Digital del Sistema Operativo (`--fingerprint`)**: Implementar un sondeo ICMP ligero para analizar el TTL de la respuesta del host. Este método permite inferir la familia del sistema operativo (Windows, Linux/Unix, Cisco) de forma rápida y sigilosa, un dato clave para seleccionar el vector de ataque adecuado.
-*   [🔲] **Sondeo de Puertos Ligero**: Añadir la capacidad de realizar un sondeo TCP SYN rápido para identificar la superficie de ataque de cada host descubierto, permitiendo al analista priorizar objetivos de alto valor de forma instantánea.
-    *   `--probe-ports <puertos>`: Escanea una lista específica de puertos (ej. `22,80,443,3389`).
-    *   `--top-ports <N>`: Escanea los `N` puertos TCP más comunes.
-    *   `--probe-iot-ports`: Un alias para escanear puertos estándar de protocolos IoT/OT (ej. `1883/MQTT`, `5683/CoAP`, `502/Modbus`), crucial para identificar infraestructura de control.
+*   [✅] **Ataque de Suplantación ARP (`--spoof`)**: Realiza ataques de Man-in-the-Middle para la interceptación de tráfico.
+*   [✅] **Implementación de Perfiles (`--profile`)**: Activa conjuntos de parámetros predefinidos para mimetismo, evasión y pruebas de seguridad.
+*   [✅] **Detección de Modos Promiscuos (`--detect-promisc`)**: Identifica sniffers en la red mediante el envío de paquetes ARP con MAC de destino incorrecta.
+*   `[🔲]` **Huella Digital Pasiva por Patrones de Tráfico (`--fingerprint-l2`)**: Analiza tráfico de broadcast (DHCP, NBNS, MDNS) para identificar dispositivos sin enviar paquetes dirigidos.
 
-**Paso 6.2: Explotación Activa (Controlled Attack Module)**
-*   [✅] **Ataque de Suplantación ARP (`--spoof`)**: Implementar un módulo de ataque para realizar envenenamiento de caché ARP (ARP poisoning) y facilitar ataques de intermediario (Man-in-the-Middle).
-    *   **Sintaxis de la Operación**: `go-arpscan --spoof <IP_objetivo> --gateway <IP_gateway>`.
-    *   **Funcionamiento Profesional**: La herramienta gestiona la activación de `ip_forwarding` para asegurar que el ataque no sea destructivo (un MitM funcional en lugar de un DoS), demostrando un control preciso del entorno.
-    *   **Impacto de Seguridad**: Permite demostrar riesgos críticos como el robo de credenciales en texto plano (HTTP, FTP), secuestro de cookies de sesión y la interceptación de datos sensibles.
+### ✅ Fase 7: Flujos de Trabajo Profesionales y Seguridad Operacional (COMPLETADO)
 
-**Paso 6.3: Evasión y Mimetismo Táctico: Perfiles de Fingerprint**
-*   [✅] **Implementación de Perfiles (`--profile <nombre>`)**: Añadir la capacidad de cargar conjuntos de parámetros predefinidos desde un fichero de configuración (`profiles.yaml`). Esta característica encapsula tácticas complejas en un solo flag, permitiendo automatizar el engaño y la evasión. A continuación se detallan los perfiles iniciales que se implementarían:
-    *   **Perfil: `windows11-workstation` (Mimetismo)**
-    *   **Perfil: `macos-ventura` (Mimetismo)**
-    *   **Perfil: `hp-officejet-printer` (Engaño)**
-    *   **Perfil: `stealth-scan-generic` (Táctica)**
-    *   **Perfil: `ids-stress-test` (Prueba de Defensas)**
+*Objetivo: Solidificar `go-arpscan` como una herramienta profesional indispensable, añadiendo características centradas en la precisión quirúrgica y la eficiencia del flujo de trabajo del pentester.*
 
-### [🔲] Fase 7: Flujos de Trabajo Profesionales y Seguridad Operacional
+*   [✅] **Listas de Exclusión (`--exclude`, `--exclude-file`)**: Asegura que la herramienta opere con precisión, cumpliendo con las Reglas del Enfrentamiento al evitar sistemas críticos.
+*   `[🔲]` **Módulo de Generación de Informes (`--report-html`, `--report-md`)**: Genera informes profesionales directamente desde los resultados del escaneo para agilizar la entrega de resultados.
 
-*Objetivo: Solidificar `go-arpscan` como una herramienta profesional indispensable, añadiendo características centradas en la seguridad, la precisión y la eficiencia del flujo de trabajo del pentester.*
+### ✅ Fase 8: Monitorización Continua e Integración como Sensor de Red (COMPLETADO)
 
-**Paso 7.1: Gestión de Alcance y Exclusiones (Safety & Precision)**
-*   [🔲] **Implementación de Listas de Exclusión**: Asegura que la herramienta opere con la precisión de un cirujano, cumpliendo estrictamente con las Reglas del Enfrentamiento (Rules of Engagement).
-    *   `--exclude <IP,CIDR>`: Permite especificar en la línea de comandos objetivos que deben ser ignorados por el escáner.
-    *   `--exclude-file <fichero.txt>`: Carga una lista de exclusiones desde un fichero, esencial para evitar el escaneo de sistemas críticos (OT, ICS, equipamiento médico).
+*Objetivo: Evolucionar `go-arpscan` a una herramienta de defensa activa (Blue Team) de Capa 2, capaz de operar como un sensor de red distribuido y de integrarse con ecosistemas de seguridad (SIEM, SOAR).*
 
-**Paso 7.2: Generación de Artefactos y Entregables (Efficiency)**
-*   [🔲] **Módulo de Generación de Informes**: Agiliza drásticamente la fase de reporte, convirtiendo los datos brutos del escaneo en entregables claros y profesionales.
-    *   `--report-html <fichero.html>`: Genera un informe HTML con un resumen, tablas de resultados y hallazgos clave.
-    *   `--report-md <fichero.md>`: Genera un informe en formato Markdown para una fácil integración en wikis y documentación.
-
-### [🚧] Fase 8: Monitorización Continua e Integración como Sensor de Red (EN CURSO)
-
-*Objetivo: Evolucionar `go-arpscan` a una herramienta de defensa activa (Blue Team), capaz de operar como un sensor de red distribuido y de integrarse con ecosistemas de seguridad más amplios (SIEM, SOAR).*
-
-**Paso 8.1: Detección de Amenazas en Tiempo Real**
-*   [✅] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva de tráfico ARP (ej. Gratuitous ARP) con sondeos activos periódicos para mantener un estado actualizado de la red.
-    *   **Salida de Eventos en JSON**: Generará logs estructurados para cada evento significativo, facilitando su ingesta por sistemas automatizados: `{"event": "NEW_HOST", "data": {...}}`, `{"event": "IP_CONFLICT", "data": {...}}`.
-*   [🔲] **Detección de ARP Spoofing**: Añadir heurísticas avanzadas para detectar ataques de suplantación en tiempo real. Esto incluye la detección de "MAC Flapping" (cambios rápidos de la MAC asociada a una IP clave como el gateway).
-
-**Paso 8.2: Integración con Ecosistemas de Orquestación**
-*   [🔲] **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: En el modo `--monitor`, añadir la capacidad de publicar eventos directamente a un broker MQTT, convirtiendo cada instancia de `go-arpscan` en un sensor de bajo coste para sistemas internos, IoT u OT.
-    *   `--publish-mqtt "tcp://user:pass@broker.local:1883"`
-    *   `--mqtt-topic-prefix "net-sensors/segment-finance"`
-*   [🔲] **Integración Nativa con Webhooks (`--webhook-url`)**: Conecta directamente con el ecosistema de SecOps y DevOps. Cuando se detecta un evento, `go-arpscan` enviará una petición `POST` con el payload JSON del evento a la URL especificada.
-    *   `--webhook-header 'Auth: Bearer ...'`: Soportará cabeceras personalizadas para la autenticación con servicios protegidos.
-    *   **Caso de Uso**: Permite la integración directa con **Slack**, **PagerDuty**, o plataformas **SOAR** para desencadenar flujos de trabajo de respuesta automatizados.
+*   [✅] **Modo Monitor (`--monitor`)**: Opera como un sensor persistente para la detección de cambios en la red en tiempo real.
+*   [✅] **Integración Nativa con Webhooks (`--webhook-url`)**: Conecta con ecosistemas de SecOps (Slack, SOARs) enviando eventos a endpoints HTTP con cabeceras de autenticación.
+*   `[🔲]` **Detección Avanzada de Anomalías ARP (`--detect-arp-spoofing`)**: Amplía el modo monitor para clasificar cambios como potencialmente maliciosos (e.g., MAC flapping del gateway).
+*   `[🔲]` **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: Permite la integración con brokers de mensajería para arquitecturas de sensores distribuidos a gran escala.
 
 ## Aviso Legal y de Responsabilidad
 
@@ -448,3 +432,4 @@ Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la 
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el fichero `LICENSE` para más detalles.
+```
