@@ -46,7 +46,8 @@ Es necesario ejecutar go-arpscan como root.`,
   sudo ./go-arpscan --file=hostlist.txt --json
   sudo ./go-arpscan --config=mi_perfil.yaml --localnet
   sudo ./go-arpscan --profile=stealth-scan-generic --localnet
-  sudo ./go-arpscan -i eth0 --spoof 192.168.1.10 --gateway 192.168.1.1`,
+  sudo ./go-arpscan -i eth0 --spoof 192.168.1.10 --gateway 192.168.1.1
+  sudo ./go-arpscan --localnet --monitor --monitor-interval 5m`,
 
 	// PersistentPreRun se ejecuta después de parsear los flags pero antes de Run.
 	// Es el lugar ideal para cargar y validar la configuración.
@@ -152,6 +153,10 @@ func init() {
 	rootCmd.Flags().BoolP("llc", "L", false, "Usa framing RFC 1042 LLC con SNAP.")
 	rootCmd.Flags().IntP("vlan", "Q", 0, "Especifica el ID de VLAN 802.1Q <i> (1-4094).")
 	rootCmd.Flags().IntP("snap", "n", 65536, "Establece la longitud de captura pcap a <i> bytes.")
+
+	// --- Monitorización Continua ---
+	rootCmd.Flags().Bool("monitor", false, "Activa el modo monitor para detectar cambios en la red en tiempo real.")
+	rootCmd.Flags().Duration("monitor-interval", 5*time.Minute, "Intervalo para los sondeos activos en modo monitor (e.g., '10m', '1h').")
 
 	// --- Ficheros de Datos y Vendors ---
 	rootCmd.Flags().StringP("ouifile", "O", "oui.txt", "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")

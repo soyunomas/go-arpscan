@@ -11,6 +11,7 @@ type AppConfig struct {
 	Verbose   int            `yaml:"verbose"`
 	UI        UIConfig       `yaml:"ui"`
 	Scan      ScanConfig     `yaml:"scan"`
+	Monitor   MonitorConfig  `yaml:"monitor"`
 	Output    OutputConfig   `yaml:"output"`
 	Advanced  AdvancedConfig `yaml:"advanced"`
 	Files     FilePaths      `yaml:"files"`
@@ -29,6 +30,11 @@ type ScanConfig struct {
 	Interval      time.Duration `yaml:"interval"`
 	BackoffFactor float64       `yaml:"backoff"`
 	Random        bool          `yaml:"random"`
+}
+
+type MonitorConfig struct {
+	Enabled  bool          `yaml:"enabled"`
+	Interval time.Duration `yaml:"interval"`
 }
 
 type OutputConfig struct {
@@ -114,6 +120,10 @@ type ResolvedConfig struct {
 	// Spoofing
 	SpoofTargetIP string
 	GatewayIP     string
+
+	// Monitoring
+	MonitorMode     bool
+	MonitorInterval time.Duration
 
 	// Packet Manipulation
 	ArpSPA       string

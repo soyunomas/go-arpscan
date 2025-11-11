@@ -2,6 +2,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,8 +39,9 @@ func New(cfg *config.ResolvedConfig, args []string) (*Runner, error) {
 	// buildScannerConfig se encarga de resolver la interfaz correctamente.
 	scanCfg, err := buildScannerConfig(cfg, args)
 	if err != nil {
-		// Ignoramos el error de "no se especificaron objetivos" si estamos en modo spoof.
-		if cfg.SpoofTargetIP == "" || !errors.Is(err, errNoTargets) {
+		// Ignoramos el error de "no se especificaron objetivos" si estamos en modo spoof o monitor.
+		isExclusiveMode := cfg.SpoofTargetIP != "" || cfg.MonitorMode
+		if !isExclusiveMode || !errors.Is(err, errNoTargets) {
 			return nil, fmt.Errorf("fallo al construir la configuración de la aplicación: %w", err)
 		}
 	}
@@ -59,6 +61,9 @@ func (r *Runner) Run() error {
 	}
 	if r.cfg.DiffMode {
 		return r.runDiffMode()
+	}
+	if r.cfg.MonitorMode {
+		return r.runMonitorMode()
 	}
 
 	// Imprimir cabecera informativa si no estamos en modo scripting o diff
@@ -541,4 +546,165 @@ func isScriptingOutput(cfg *config.ResolvedConfig) bool {
 type hostInfo struct {
 	MAC    string
 	Vendor string
+}
+
+// --- NUEVO CÓDIGO PARA EL MODO MONITOR ---
+
+// MonitorEvent define la estructura de un evento de red para la salida JSON.
+type MonitorEvent struct {
+	Timestamp string `json:"timestamp"`
+	Event     string `json:"event"` // e.g., "NEW_HOST", "IP_CONFLICT", "HOST_REMOVED"
+	IP        string `json:"ip"`
+	MAC       string `json:"mac"`
+	Vendor    string `json:"vendor"`
+	Notes     string `json:"notes,omitempty"`
+}
+
+// logMonitorEvent serializa un evento a JSON y lo imprime en la salida estándar.
+func logMonitorEvent(event MonitorEvent) {
+	event.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	jsonData, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("Error al serializar el evento del monitor a JSON: %v", err)
+		return
+	}
+	fmt.Println(string(jsonData))
+}
+
+// runMonitorMode es el punto de entrada para la lógica de monitorización continua.
+func (r *Runner) runMonitorMode() error {
+	log.Printf("Iniciando modo monitor en la interfaz %s. Presione Ctrl+C para salir.", r.scanConfig.Interface.Name)
+	knownHosts := make(map[string]hostInfo)
+	arpPackets := make(chan *layers.ARP)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Manejar Ctrl+C
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		log.Println("\nSeñal de interrupción recibida. Finalizando el modo monitor...")
+		cancel()
+	}()
+
+	// Iniciar la escucha pasiva
+	go r.passiveARPListener(ctx, arpPackets)
+
+	// Realizar un escaneo inicial para establecer la línea base
+	log.Println("Realizando escaneo inicial para establecer la línea base de la red...")
+	initialScan := r.runScanAndCollect()
+	for _, result := range initialScan.Results {
+		info := hostInfo{MAC: result.MAC, Vendor: result.Vendor}
+		knownHosts[result.IP] = info
+		logMonitorEvent(MonitorEvent{Event: "NEW_HOST", IP: result.IP, MAC: info.MAC, Vendor: info.Vendor})
+	}
+	log.Printf("Línea base establecida. %d hosts activos detectados. Iniciando monitorización continua.", len(knownHosts))
+
+	ticker := time.NewTicker(r.cfg.MonitorInterval)
+	defer ticker.Stop()
+
+	// Bucle principal del monitor
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case arpPacket := <-arpPackets:
+			srcIP := net.IP(arpPacket.SourceProtAddress).String()
+			srcMAC := net.HardwareAddr(arpPacket.SourceHwAddress).String()
+
+			if known, ok := knownHosts[srcIP]; ok {
+				if known.MAC != srcMAC {
+					oldMAC := known.MAC
+					newInfo := hostInfo{MAC: srcMAC, Vendor: r.scanConfig.VendorDB.Lookup(srcMAC)}
+					knownHosts[srcIP] = newInfo
+					logMonitorEvent(MonitorEvent{
+						Event:  "IP_CONFLICT",
+						IP:     srcIP,
+						MAC:    newInfo.MAC,
+						Vendor: newInfo.Vendor,
+						Notes:  fmt.Sprintf("La MAC cambió de %s a %s.", oldMAC, newInfo.MAC),
+					})
+				}
+			} else {
+				info := hostInfo{MAC: srcMAC, Vendor: r.scanConfig.VendorDB.Lookup(srcMAC)}
+				knownHosts[srcIP] = info
+				logMonitorEvent(MonitorEvent{Event: "NEW_HOST", IP: srcIP, MAC: info.MAC, Vendor: info.Vendor})
+			}
+		case <-ticker.C:
+			log.Printf("Iniciando sondeo activo periódico (intervalo: %v)...", r.cfg.MonitorInterval)
+			activeScan := r.runScanAndCollect()
+			currentScanHosts := make(map[string]hostInfo)
+
+			for _, result := range activeScan.Results {
+				info := hostInfo{MAC: result.MAC, Vendor: result.Vendor}
+				currentScanHosts[result.IP] = info
+
+				if oldInfo, found := knownHosts[result.IP]; !found {
+					knownHosts[result.IP] = info
+					logMonitorEvent(MonitorEvent{Event: "NEW_HOST", IP: result.IP, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado en sondeo activo."})
+				} else if oldInfo.MAC != info.MAC {
+					knownHosts[result.IP] = info
+					logMonitorEvent(MonitorEvent{
+						Event:  "IP_CONFLICT",
+						IP:     result.IP,
+						MAC:    info.MAC,
+						Vendor: info.Vendor,
+						Notes:  fmt.Sprintf("La MAC cambió de %s a %s (detectado en sondeo activo).", oldInfo.MAC, info.MAC),
+					})
+				}
+			}
+
+			// Detectar hosts eliminados
+			for ip, oldInfo := range knownHosts {
+				if _, found := currentScanHosts[ip]; !found {
+					delete(knownHosts, ip)
+					logMonitorEvent(MonitorEvent{Event: "HOST_REMOVED", IP: ip, MAC: oldInfo.MAC, Vendor: oldInfo.Vendor, Notes: "No respondió al sondeo activo."})
+				}
+			}
+			log.Println("Sondeo activo completado.")
+		}
+	}
+}
+
+// passiveARPListener escucha pasivamente el tráfico ARP y envía los paquetes a un canal.
+func (r *Runner) passiveARPListener(ctx context.Context, arpChannel chan<- *layers.ARP) {
+	handle, err := pcap.OpenLive(r.scanConfig.Interface.Name, 1, true, pcap.BlockForever)
+	if err != nil {
+		log.Printf("Error crítico en listener pasivo: no se pudo abrir pcap: %v", err)
+		return
+	}
+	defer handle.Close()
+
+	if err := handle.SetBPFFilter("arp"); err != nil {
+		log.Printf("Error crítico en listener pasivo: no se pudo establecer filtro BPF: %v", err)
+		return
+	}
+
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case packet, ok := <-packetSource.Packets():
+			if !ok {
+				return
+			}
+			arpLayer := packet.Layer(layers.LayerTypeARP)
+			if arpLayer == nil {
+				continue
+			}
+			arp, _ := arpLayer.(*layers.ARP)
+
+			// Ignorar paquetes ARP enviados por nuestra propia interfaz
+			if bytes.Equal(arp.SourceHwAddress, r.scanConfig.Interface.HardwareAddr) {
+				continue
+			}
+
+			// Enviar una copia para evitar condiciones de carrera si el buffer del paquete es reutilizado
+			arpCopy := *arp
+			arpChannel <- &arpCopy
+		}
+	}
 }

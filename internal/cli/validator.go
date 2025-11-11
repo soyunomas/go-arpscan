@@ -24,6 +24,26 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 		if cfg.DiffMode {
 			return fmt.Errorf("el modo --spoof no se puede combinar con --diff")
 		}
+		if cfg.MonitorMode {
+			return fmt.Errorf("el modo --spoof no se puede combinar con --monitor")
+		}
+	}
+
+	// Validar modo monitor (--monitor)
+	if cfg.MonitorMode {
+		if !cfg.UseLocalnet {
+			return fmt.Errorf("el modo --monitor requiere --localnet para definir el alcance de la monitorización")
+		}
+		if cfg.FilePath != "" || len(args) > 0 {
+			return fmt.Errorf("el modo --monitor no se puede combinar con --file o objetivos en la línea de comandos")
+		}
+		if cfg.SpoofTargetIP != "" || cfg.DiffMode || cfg.StateFilePath != "" {
+			return fmt.Errorf("el modo --monitor es exclusivo y no se puede combinar con --spoof, --diff o --state-file")
+		}
+		// El modo monitor tiene su propia salida JSON, no es compatible con otros formatos.
+		if cfg.JSONOutput || cfg.CSVOutput || cfg.Plain || cfg.Quiet {
+			return fmt.Errorf("el modo --monitor no es compatible con otros flags de formato de salida (--json, --csv, etc.)")
+		}
 	}
 
 	// Validar formatos de salida mutuamente excluyentes

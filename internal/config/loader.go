@@ -198,6 +198,12 @@ func applyAppConfig(cmd *cobra.Command, cfg *ResolvedConfig, baseCfg *AppConfig)
 	if !cmd.Flags().Changed("random") && baseCfg.Scan.Random {
 		cfg.Random = true
 	}
+	if !cmd.Flags().Changed("monitor") && baseCfg.Monitor.Enabled {
+		cfg.MonitorMode = true
+	}
+	if !cmd.Flags().Changed("monitor-interval") && baseCfg.Monitor.Interval > 0 {
+		cfg.MonitorInterval = baseCfg.Monitor.Interval
+	}
 	if !cmd.Flags().Changed("rtt") && baseCfg.Output.RTT {
 		cfg.ShowRTT = true
 	}
@@ -372,6 +378,8 @@ func loadFinalValuesFromFlags(cmd *cobra.Command, cfg *ResolvedConfig) {
 	cfg.BackoffFactor, _ = cmd.Flags().GetFloat64("backoff")
 	cfg.SpoofTargetIP, _ = cmd.Flags().GetString("spoof")
 	cfg.GatewayIP, _ = cmd.Flags().GetString("gateway")
+	cfg.MonitorMode, _ = cmd.Flags().GetBool("monitor")
+	cfg.MonitorInterval, _ = cmd.Flags().GetDuration("monitor-interval")
 	cfg.ArpSPA, _ = cmd.Flags().GetString("arpspa")
 	cfg.ArpSHA, _ = cmd.Flags().GetString("arpsha")
 	cfg.EthSrcMAC, _ = cmd.Flags().GetString("srcaddr")
