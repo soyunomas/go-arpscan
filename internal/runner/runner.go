@@ -12,10 +12,12 @@ import (
 	"go-arpscan/internal/scanner"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,12 +37,12 @@ type Runner struct {
 
 // New crea una nueva instancia de Runner, validando la configuración inicial.
 func New(cfg *config.ResolvedConfig, args []string) (*Runner, error) {
-	// En modo spoof, no necesitamos la configuración completa del scanner, pero sí la interfaz.
+	// En modos exclusivos, no necesitamos la configuración completa del scanner, pero sí la interfaz.
 	// buildScannerConfig se encarga de resolver la interfaz correctamente.
 	scanCfg, err := buildScannerConfig(cfg, args)
 	if err != nil {
-		// Ignoramos el error de "no se especificaron objetivos" si estamos en modo spoof o monitor.
-		isExclusiveMode := cfg.SpoofTargetIP != "" || cfg.MonitorMode
+		// Ignoramos el error de "no se especificaron objetivos" si estamos en un modo exclusivo.
+		isExclusiveMode := cfg.SpoofTargetIP != "" || cfg.MonitorMode || cfg.DetectPromiscTargetIP != ""
 		if !isExclusiveMode || !errors.Is(err, errNoTargets) {
 			return nil, fmt.Errorf("fallo al construir la configuración de la aplicación: %w", err)
 		}
@@ -58,6 +60,9 @@ func (r *Runner) Run() error {
 	// Decidir el modo de ejecución
 	if r.cfg.SpoofTargetIP != "" {
 		return r.runSpoofMode()
+	}
+	if r.cfg.DetectPromiscTargetIP != "" { // <<< NUEVO MODO
+		return r.runDetectPromiscMode()
 	}
 	if r.cfg.DiffMode {
 		return r.runDiffMode()
@@ -191,6 +196,11 @@ func (r *Runner) runDiffMode() error {
 		return fmt.Errorf("error al parsear el fichero de estado JSON '%s': %w", stateFile, err)
 	}
 
+	type hostInfo struct {
+		MAC    string
+		Vendor string
+	}
+
 	oldStateMap := make(map[string]hostInfo)
 	for _, res := range oldState.Results {
 		oldStateMap[res.IP] = hostInfo{MAC: res.MAC, Vendor: res.Vendor}
@@ -238,6 +248,107 @@ func (r *Runner) runDiffMode() error {
 	return nil
 }
 
+// --- INICIO DE LA SECCIÓN CORREGIDA ---
+
+// runDetectPromiscMode ejecuta la lógica de detección de modo promiscuo.
+func (r *Runner) runDetectPromiscMode() error {
+	iface := r.scanConfig.Interface
+	targetIPStr := r.cfg.DetectPromiscTargetIP
+	log.Printf("Iniciando detección de modo promiscuo contra %s en la interfaz %s", targetIPStr, iface.Name)
+
+	targetIP := net.ParseIP(targetIPStr)
+	if targetIP == nil || targetIP.To4() == nil {
+		return fmt.Errorf("la IP objetivo '%s' no es una dirección IPv4 válida", targetIPStr)
+	}
+
+	// Paso 1: Obtener la MAC real. Abrimos un handle temporal solo para esto.
+	log.Println("Paso 1: Obteniendo la dirección MAC real del objetivo para confirmar que está en línea...")
+	handle, err := pcap.OpenLive(iface.Name, 128, true, pcap.BlockForever)
+	if err != nil {
+		return fmt.Errorf("no se pudo abrir el handle de pcap para obtener la MAC: %w", err)
+	}
+	realTargetMAC, err := getMacForIP(handle, gopacket.NewPacketSource(handle, handle.LinkType()), iface, targetIP)
+	handle.Close() // Cerramos el handle inmediatamente después de usarlo.
+
+	if err != nil {
+		return fmt.Errorf("el objetivo %s no respondió a un ARP request estándar. No se puede continuar. Error: %w", targetIP, err)
+	}
+	log.Printf("-> MAC real obtenida: %s. El objetivo está activo.", realTargetMAC)
+
+	// Paso 2: Preparar y enviar el paquete de sondeo. Abrimos un nuevo handle para esta operación.
+	log.Println("Paso 2: Enviando paquete ARP de sondeo con MAC de destino incorrecta...")
+	handle, err = pcap.OpenLive(iface.Name, 128, true, 5*time.Second) // Usamos un timeout en el handle
+	if err != nil {
+		return fmt.Errorf("no se pudo abrir el handle de pcap para el sondeo: %w", err)
+	}
+	defer handle.Close()
+
+	fakeDstMAC, _ := net.ParseMAC("01:02:03:04:05:06")
+
+	eth := layers.Ethernet{
+		SrcMAC:       iface.HardwareAddr,
+		DstMAC:       fakeDstMAC,
+		EthernetType: layers.EthernetTypeARP,
+	}
+	arp := layers.ARP{
+		AddrType:          layers.LinkTypeEthernet,
+		Protocol:          layers.EthernetTypeIPv4,
+		HwAddressSize:     6,
+		ProtAddressSize:   4,
+		Operation:         layers.ARPRequest,
+		SourceHwAddress:   []byte(iface.HardwareAddr),
+		SourceProtAddress: []byte(targetIP.To4()),
+		DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
+		DstProtAddress:    []byte(targetIP.To4()),
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	gopacket.SerializeLayers(buf, opts, &eth, &arp)
+	if err := handle.WritePacketData(buf.Bytes()); err != nil {
+		return fmt.Errorf("error al enviar el paquete de sondeo: %w", err)
+	}
+	log.Printf("Paquete enviado a %s (Ethernet Dst: %s).", targetIP, fakeDstMAC)
+
+	// Paso 3: Escuchar la respuesta. Creamos un PacketSource FRESCO para esta escucha.
+	log.Println("Paso 3: Escuchando una posible respuesta (timeout 5s)...")
+	bpfFilter := fmt.Sprintf("arp and src host %s", targetIP.String())
+	if err := handle.SetBPFFilter(bpfFilter); err != nil {
+		return fmt.Errorf("no se pudo establecer el filtro BPF: %w", err)
+	}
+
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	for {
+		packet, err := packetSource.NextPacket()
+		if err == pcap.NextErrorTimeoutExpired {
+			// Este es el caso de éxito para "no promiscuo".
+			notDetectedColor := color.New(color.FgHiYellow).SprintFunc()
+			log.Printf("\nVEREDICTO: %s - No se recibió respuesta. El host %s (%s) parece operar en MODO NORMAL.",
+				notDetectedColor("NO DETECTADO"), targetIP, realTargetMAC)
+			return nil
+		}
+		if err != nil {
+			// Otro error inesperado
+			return fmt.Errorf("error leyendo el paquete de respuesta: %w", err)
+		}
+
+		arpLayer := packet.Layer(layers.LayerTypeARP)
+		if arpLayer == nil {
+			continue
+		}
+		arp, _ := arpLayer.(*layers.ARP)
+
+		if arp.Operation == layers.ARPReply {
+			detectedColor := color.New(color.FgHiGreen, color.Bold).SprintFunc()
+			log.Printf("\nVEREDICTO: %s - Se recibió una respuesta ARP. El host %s (%s) está en MODO PROMISCUO.",
+				detectedColor("¡DETECTADO!"), targetIP, realTargetMAC)
+			return nil
+		}
+	}
+}
+
+// --- FIN DE LA SECCIÓN CORREGIDA ---
+
 // runSpoofMode ejecuta la lógica de suplantación ARP.
 func (r *Runner) runSpoofMode() error {
 	iface := r.scanConfig.Interface
@@ -257,9 +368,7 @@ func (r *Runner) runSpoofMode() error {
 	}
 	defer handle.Close()
 
-	// <-- INICIO DE LA CORRECCIÓN: Crear un PacketSource único y reutilizable -->
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	// <-- FIN DE LA CORRECCIÓN -->
 
 	log.Println("Obteniendo dirección MAC de la víctima...")
 	victimMAC, err := getMacForIP(handle, packetSource, iface, victimIP)
@@ -543,38 +652,95 @@ func isScriptingOutput(cfg *config.ResolvedConfig) bool {
 	return cfg.JSONOutput || cfg.CSVOutput || cfg.Plain || cfg.Quiet
 }
 
-type hostInfo struct {
-	MAC    string
-	Vendor string
-}
+// --- LÓGICA DEL MODO MONITOR MEJORADA ---
 
-// --- NUEVO CÓDIGO PARA EL MODO MONITOR ---
+// HostState representa el estado conocido de un host en el modo monitor.
+type HostState int
+
+const (
+	HostStateActive   HostState = iota // El host ha sido visto recientemente.
+	HostStateInactive                  // El host no respondió al último sondeo.
+)
+
+// monitorHostInfo almacena el estado completo de un host monitorizado.
+type monitorHostInfo struct {
+	MAC      string
+	Vendor   string
+	State    HostState
+	LastSeen time.Time
+}
 
 // MonitorEvent define la estructura de un evento de red para la salida JSON.
 type MonitorEvent struct {
 	Timestamp string `json:"timestamp"`
-	Event     string `json:"event"` // e.g., "NEW_HOST", "IP_CONFLICT", "HOST_REMOVED"
+	Event     string `json:"event"` // e.g., "NEW_HOST", "HOST_RETURNED", "HOST_INACTIVE", "IP_CONFLICT", "HOST_REMOVED"
 	IP        string `json:"ip"`
 	MAC       string `json:"mac"`
 	Vendor    string `json:"vendor"`
 	Notes     string `json:"notes,omitempty"`
 }
 
-// logMonitorEvent serializa un evento a JSON y lo imprime en la salida estándar.
-func logMonitorEvent(event MonitorEvent) {
+// dispatchEvent gestiona el envío de un evento tanto a la salida estándar como a un webhook.
+func (r *Runner) dispatchEvent(event MonitorEvent) {
+	// 1. Rellenar el timestamp
 	event.Timestamp = time.Now().UTC().Format(time.RFC3339)
+
+	// 2. Serializar a JSON y mostrar en la salida estándar
 	jsonData, err := json.Marshal(event)
 	if err != nil {
 		log.Printf("Error al serializar el evento del monitor a JSON: %v", err)
 		return
 	}
 	fmt.Println(string(jsonData))
+
+	// 3. Enviar a webhook de forma asíncrona si está configurado
+	if r.cfg.WebhookURL != "" {
+		go r.sendWebhook(jsonData)
+	}
+}
+
+// sendWebhook envía el payload de un evento a la URL configurada.
+func (r *Runner) sendWebhook(payload []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.WebhookURL, bytes.NewBuffer(payload))
+	if err != nil {
+		log.Printf("ADVERTENCIA (Webhook): Error creando la petición: %v", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "go-arpscan-monitor")
+
+	for _, h := range r.cfg.WebhookHeaders {
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			req.Header.Set(key, value)
+		} else {
+			log.Printf("ADVERTENCIA (Webhook): Ignorando cabecera mal formada: %s", h)
+		}
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("ADVERTENCIA (Webhook): Error enviando la petición a %s: %v", r.cfg.WebhookURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("ADVERTENCIA (Webhook): Respuesta no exitosa (código %d) de %s", resp.StatusCode, r.cfg.WebhookURL)
+	}
 }
 
 // runMonitorMode es el punto de entrada para la lógica de monitorización continua.
 func (r *Runner) runMonitorMode() error {
 	log.Printf("Iniciando modo monitor en la interfaz %s. Presione Ctrl+C para salir.", r.scanConfig.Interface.Name)
-	knownHosts := make(map[string]hostInfo)
+	knownHosts := make(map[string]*monitorHostInfo) // Usamos punteros para poder modificar in-place.
 	arpPackets := make(chan *layers.ARP)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -596,9 +762,14 @@ func (r *Runner) runMonitorMode() error {
 	log.Println("Realizando escaneo inicial para establecer la línea base de la red...")
 	initialScan := r.runScanAndCollect()
 	for _, result := range initialScan.Results {
-		info := hostInfo{MAC: result.MAC, Vendor: result.Vendor}
+		info := &monitorHostInfo{
+			MAC:      result.MAC,
+			Vendor:   result.Vendor,
+			State:    HostStateActive,
+			LastSeen: time.Now(),
+		}
 		knownHosts[result.IP] = info
-		logMonitorEvent(MonitorEvent{Event: "NEW_HOST", IP: result.IP, MAC: info.MAC, Vendor: info.Vendor})
+		r.dispatchEvent(MonitorEvent{Event: "NEW_HOST", IP: result.IP, MAC: info.MAC, Vendor: info.Vendor})
 	}
 	log.Printf("Línea base establecida. %d hosts activos detectados. Iniciando monitorización continua.", len(knownHosts))
 
@@ -610,57 +781,97 @@ func (r *Runner) runMonitorMode() error {
 		select {
 		case <-ctx.Done():
 			return nil
+
 		case arpPacket := <-arpPackets:
 			srcIP := net.IP(arpPacket.SourceProtAddress).String()
 			srcMAC := net.HardwareAddr(arpPacket.SourceHwAddress).String()
 
-			if known, ok := knownHosts[srcIP]; ok {
-				if known.MAC != srcMAC {
-					oldMAC := known.MAC
-					newInfo := hostInfo{MAC: srcMAC, Vendor: r.scanConfig.VendorDB.Lookup(srcMAC)}
-					knownHosts[srcIP] = newInfo
-					logMonitorEvent(MonitorEvent{
+			if knownInfo, ok := knownHosts[srcIP]; ok {
+				// El host es conocido, actualizamos su estado.
+				knownInfo.LastSeen = time.Now()
+				if knownInfo.MAC != srcMAC {
+					oldMAC := knownInfo.MAC
+					knownInfo.MAC = srcMAC
+					knownInfo.Vendor = r.scanConfig.VendorDB.Lookup(srcMAC)
+					r.dispatchEvent(MonitorEvent{
 						Event:  "IP_CONFLICT",
 						IP:     srcIP,
-						MAC:    newInfo.MAC,
-						Vendor: newInfo.Vendor,
-						Notes:  fmt.Sprintf("La MAC cambió de %s a %s.", oldMAC, newInfo.MAC),
+						MAC:    knownInfo.MAC,
+						Vendor: knownInfo.Vendor,
+						Notes:  fmt.Sprintf("La MAC cambió de %s a %s (visto pasivamente).", oldMAC, srcMAC),
 					})
 				}
+				if knownInfo.State == HostStateInactive {
+					knownInfo.State = HostStateActive
+					r.dispatchEvent(MonitorEvent{Event: "HOST_RETURNED", IP: srcIP, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Visto pasivamente."})
+				}
 			} else {
-				info := hostInfo{MAC: srcMAC, Vendor: r.scanConfig.VendorDB.Lookup(srcMAC)}
+				// El host es completamente nuevo.
+				info := &monitorHostInfo{
+					MAC:      srcMAC,
+					Vendor:   r.scanConfig.VendorDB.Lookup(srcMAC),
+					State:    HostStateActive,
+					LastSeen: time.Now(),
+				}
 				knownHosts[srcIP] = info
-				logMonitorEvent(MonitorEvent{Event: "NEW_HOST", IP: srcIP, MAC: info.MAC, Vendor: info.Vendor})
+				r.dispatchEvent(MonitorEvent{Event: "NEW_HOST", IP: srcIP, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado pasivamente."})
 			}
+
 		case <-ticker.C:
 			log.Printf("Iniciando sondeo activo periódico (intervalo: %v)...", r.cfg.MonitorInterval)
 			activeScan := r.runScanAndCollect()
-			currentScanHosts := make(map[string]hostInfo)
-
+			currentScanHosts := make(map[string]scanner.ScanResult)
 			for _, result := range activeScan.Results {
-				info := hostInfo{MAC: result.MAC, Vendor: result.Vendor}
-				currentScanHosts[result.IP] = info
+				currentScanHosts[result.IP] = result
+			}
 
-				if oldInfo, found := knownHosts[result.IP]; !found {
-					knownHosts[result.IP] = info
-					logMonitorEvent(MonitorEvent{Event: "NEW_HOST", IP: result.IP, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado en sondeo activo."})
-				} else if oldInfo.MAC != info.MAC {
-					knownHosts[result.IP] = info
-					logMonitorEvent(MonitorEvent{
-						Event:  "IP_CONFLICT",
-						IP:     result.IP,
-						MAC:    info.MAC,
-						Vendor: info.Vendor,
-						Notes:  fmt.Sprintf("La MAC cambió de %s a %s (detectado en sondeo activo).", oldInfo.MAC, info.MAC),
-					})
+			// Actualizar estado de hosts conocidos basado en el sondeo
+			for ip, knownInfo := range knownHosts {
+				if newInfo, responded := currentScanHosts[ip]; responded {
+					knownInfo.LastSeen = time.Now()
+					if knownInfo.MAC != newInfo.MAC {
+						oldMAC := knownInfo.MAC
+						knownInfo.MAC = newInfo.MAC
+						knownInfo.Vendor = newInfo.Vendor
+						r.dispatchEvent(MonitorEvent{
+							Event:  "IP_CONFLICT",
+							IP:     ip,
+							MAC:    newInfo.MAC,
+							Vendor: newInfo.Vendor,
+							Notes:  fmt.Sprintf("La MAC cambió de %s a %s (detectado en sondeo activo).", oldMAC, newInfo.MAC),
+						})
+					}
+					if knownInfo.State == HostStateInactive {
+						knownInfo.State = HostStateActive
+						r.dispatchEvent(MonitorEvent{Event: "HOST_RETURNED", IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Respondió al sondeo activo."})
+					}
+				} else { // No respondió
+					if knownInfo.State == HostStateActive {
+						knownInfo.State = HostStateInactive
+						r.dispatchEvent(MonitorEvent{Event: "HOST_INACTIVE", IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "No respondió al sondeo activo."})
+					}
 				}
 			}
 
-			// Detectar hosts eliminados
-			for ip, oldInfo := range knownHosts {
-				if _, found := currentScanHosts[ip]; !found {
+			// Purgar hosts que han estado inactivos demasiado tiempo
+			for ip, knownInfo := range knownHosts {
+				if knownInfo.State == HostStateInactive && time.Since(knownInfo.LastSeen) > r.cfg.MonitorRemovalThreshold {
+					r.dispatchEvent(MonitorEvent{Event: "HOST_REMOVED", IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: fmt.Sprintf("Inactivo durante más de %v.", r.cfg.MonitorRemovalThreshold)})
 					delete(knownHosts, ip)
-					logMonitorEvent(MonitorEvent{Event: "HOST_REMOVED", IP: ip, MAC: oldInfo.MAC, Vendor: oldInfo.Vendor, Notes: "No respondió al sondeo activo."})
+				}
+			}
+
+			// Añadir nuevos hosts descubiertos en el sondeo activo
+			for ip, newInfo := range currentScanHosts {
+				if _, isKnown := knownHosts[ip]; !isKnown {
+					info := &monitorHostInfo{
+						MAC:      newInfo.MAC,
+						Vendor:   newInfo.Vendor,
+						State:    HostStateActive,
+						LastSeen: time.Now(),
+					}
+					knownHosts[ip] = info
+					r.dispatchEvent(MonitorEvent{Event: "NEW_HOST", IP: ip, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado en sondeo activo."})
 				}
 			}
 			log.Println("Sondeo activo completado.")

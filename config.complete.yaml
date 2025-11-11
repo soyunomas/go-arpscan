@@ -64,6 +64,13 @@ monitor:
   # Intervalo entre sondeos activos en modo monitor (--monitor-interval).
   interval: "5m"
 
+  # URL del webhook para enviar eventos (--webhook-url).
+  webhook-url: "" # Ejemplo: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+
+  # Cabeceras personalizadas para las peticiones webhook (--webhook-header).
+  webhook-headers:
+    - "Content-Type: application/json"
+    # - "Authorization: Bearer my-secret-token"
 
 # --- FORMATO DE SALIDA POR DEFECTO ---
 
