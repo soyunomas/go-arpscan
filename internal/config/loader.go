@@ -204,6 +204,15 @@ func applyAppConfig(cmd *cobra.Command, cfg *ResolvedConfig, baseCfg *AppConfig)
 	if !cmd.Flags().Changed("monitor-interval") && baseCfg.Monitor.Interval > 0 {
 		cfg.MonitorInterval = baseCfg.Monitor.Interval
 	}
+	if !cmd.Flags().Changed("monitor-removal-threshold") && baseCfg.Monitor.RemovalThreshold > 0 {
+		cfg.MonitorRemovalThreshold = baseCfg.Monitor.RemovalThreshold
+	}
+	if !cmd.Flags().Changed("webhook-url") && baseCfg.Monitor.WebhookURL != "" {
+		cfg.WebhookURL = baseCfg.Monitor.WebhookURL
+	}
+	if !cmd.Flags().Changed("webhook-header") && len(baseCfg.Monitor.WebhookHeaders) > 0 {
+		cfg.WebhookHeaders = baseCfg.Monitor.WebhookHeaders
+	}
 	if !cmd.Flags().Changed("rtt") && baseCfg.Output.RTT {
 		cfg.ShowRTT = true
 	}
@@ -370,6 +379,8 @@ func loadFinalValuesFromFlags(cmd *cobra.Command, cfg *ResolvedConfig) {
 	cfg.ScanTimeout, _ = cmd.Flags().GetDuration("scan-timeout")
 	cfg.UseLocalnet, _ = cmd.Flags().GetBool("localnet")
 	cfg.FilePath, _ = cmd.Flags().GetString("file")
+	cfg.ExcludeTargets, _ = cmd.Flags().GetStringSlice("exclude")
+	cfg.ExcludeFilePath, _ = cmd.Flags().GetString("exclude-file")
 	cfg.Numeric, _ = cmd.Flags().GetBool("numeric")
 	cfg.HostTimeout, _ = cmd.Flags().GetDuration("host-timeout")
 	cfg.Retry, _ = cmd.Flags().GetInt("retry")
@@ -378,8 +389,12 @@ func loadFinalValuesFromFlags(cmd *cobra.Command, cfg *ResolvedConfig) {
 	cfg.BackoffFactor, _ = cmd.Flags().GetFloat64("backoff")
 	cfg.SpoofTargetIP, _ = cmd.Flags().GetString("spoof")
 	cfg.GatewayIP, _ = cmd.Flags().GetString("gateway")
+	cfg.DetectPromiscTargetIP, _ = cmd.Flags().GetString("detect-promisc") // <<< LECTURA DEL NUEVO FLAG
 	cfg.MonitorMode, _ = cmd.Flags().GetBool("monitor")
 	cfg.MonitorInterval, _ = cmd.Flags().GetDuration("monitor-interval")
+	cfg.MonitorRemovalThreshold, _ = cmd.Flags().GetDuration("monitor-removal-threshold")
+	cfg.WebhookURL, _ = cmd.Flags().GetString("webhook-url")
+	cfg.WebhookHeaders, _ = cmd.Flags().GetStringSlice("webhook-header")
 	cfg.ArpSPA, _ = cmd.Flags().GetString("arpspa")
 	cfg.ArpSHA, _ = cmd.Flags().GetString("arpsha")
 	cfg.EthSrcMAC, _ = cmd.Flags().GetString("srcaddr")

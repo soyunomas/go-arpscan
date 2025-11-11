@@ -80,13 +80,88 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	}
 	targets = append(targets, args...)
 
-	if len(targets) == 0 && cfg.SpoofTargetIP == "" {
-		return &scanner.Config{Interface: iface}, errNoTargets
-	}
-
 	ips, err := network.ResolveTargets(targets, cfg.Numeric)
 	if err != nil {
-		return nil, fmt.Errorf("error resolviendo targets: %w", err)
+		// Si el usuario proporcionó objetivos pero no se pudieron resolver, es un error.
+		if len(targets) > 0 {
+			return nil, fmt.Errorf("error resolviendo targets: %w", err)
+		}
+		// Si no se proporcionaron objetivos, `ips` será un slice vacío, lo cual es manejado más adelante.
+	}
+
+	// --- Aplicación de Exclusiones ---
+	if len(cfg.ExcludeTargets) > 0 || cfg.ExcludeFilePath != "" {
+		var exclusionStrings []string
+		exclusionStrings = append(exclusionStrings, cfg.ExcludeTargets...)
+
+		if cfg.ExcludeFilePath != "" {
+			file, err := os.Open(cfg.ExcludeFilePath)
+			if err != nil {
+				return nil, fmt.Errorf("error abriendo el archivo de exclusión '%s': %w", cfg.ExcludeFilePath, err)
+			}
+			defer file.Close()
+
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line != "" && !strings.HasPrefix(line, "#") {
+					exclusionStrings = append(exclusionStrings, line)
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				return nil, fmt.Errorf("error leyendo el archivo de exclusión '%s': %w", cfg.ExcludeFilePath, err)
+			}
+		}
+
+		if len(exclusionStrings) > 0 {
+			excludedIPs := make(map[string]struct{})
+			var excludedNets []*net.IPNet
+
+			for _, exclusion := range exclusionStrings {
+				if _, ipNet, err := net.ParseCIDR(exclusion); err == nil {
+					excludedNets = append(excludedNets, ipNet)
+					continue
+				}
+				if ip := net.ParseIP(exclusion); ip != nil {
+					excludedIPs[ip.String()] = struct{}{}
+					continue
+				}
+				log.Printf("Advertencia: formato de exclusión no válido, ignorando: '%s'", exclusion)
+			}
+
+			if len(excludedIPs) > 0 || len(excludedNets) > 0 {
+				initialCount := len(ips)
+				var filteredIPs []net.IP
+
+				for _, ip := range ips {
+					isExcluded := false
+					if _, found := excludedIPs[ip.String()]; found {
+						isExcluded = true
+					} else {
+						for _, net := range excludedNets {
+							if net.Contains(ip) {
+								isExcluded = true
+								break
+							}
+						}
+					}
+
+					if !isExcluded {
+						filteredIPs = append(filteredIPs, ip)
+					}
+				}
+
+				if cfg.VerboseCount > 0 && initialCount != len(filteredIPs) {
+					log.Printf("Se aplicaron exclusiones. %d hosts eliminados de la lista de objetivos. %d hosts restantes.", initialCount-len(filteredIPs), len(filteredIPs))
+				}
+				ips = filteredIPs
+			}
+		}
+	}
+
+	// Ahora, después de filtrar, comprobamos si nos hemos quedado sin objetivos.
+	if len(ips) == 0 && cfg.SpoofTargetIP == "" {
+		return &scanner.Config{Interface: iface}, errNoTargets
 	}
 
 	// --- Aleatorización ---

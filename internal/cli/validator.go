@@ -29,6 +29,19 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 		}
 	}
 
+	// Validar modo de detección promiscuo (--detect-promisc) <<< NUEVO BLOQUE
+	if cfg.DetectPromiscTargetIP != "" {
+		if cfg.UseLocalnet || cfg.FilePath != "" || len(args) > 0 {
+			return fmt.Errorf("el modo --detect-promisc no se puede combinar con --localnet, --file o objetivos en la línea de comandos")
+		}
+		if cfg.SpoofTargetIP != "" || cfg.DiffMode || cfg.MonitorMode {
+			return fmt.Errorf("el modo --detect-promisc es exclusivo y no se puede combinar con --spoof, --diff o --monitor")
+		}
+		if isAnyFormatFlagSet(cfg) {
+			return fmt.Errorf("el modo --detect-promisc no es compatible con otros flags de formato de salida")
+		}
+	}
+
 	// Validar modo monitor (--monitor)
 	if cfg.MonitorMode {
 		if !cfg.UseLocalnet {
@@ -46,21 +59,13 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 		}
 	}
 
+	// Validar dependencias del webhook
+	if (cfg.WebhookURL != "" || len(cfg.WebhookHeaders) > 0) && !cfg.MonitorMode {
+		return fmt.Errorf("los flags --webhook-url y --webhook-header solo son válidos en modo --monitor")
+	}
+
 	// Validar formatos de salida mutuamente excluyentes
-	formatFlags := 0
-	if cfg.JSONOutput {
-		formatFlags++
-	}
-	if cfg.CSVOutput {
-		formatFlags++
-	}
-	if cfg.Quiet {
-		formatFlags++
-	}
-	if cfg.Plain {
-		formatFlags++
-	}
-	if formatFlags > 1 {
+	if countFormatFlags(cfg) > 1 {
 		return fmt.Errorf("los flags de formato (--json, --csv, --quiet, --plain) son mutuamente excluyentes")
 	}
 
@@ -69,7 +74,7 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 		if cfg.StateFilePath == "" {
 			return fmt.Errorf("el modo --diff requiere que se especifique un fichero de estado con --state-file")
 		}
-		if formatFlags > 0 {
+		if countFormatFlags(cfg) > 0 {
 			return fmt.Errorf("el modo --diff no se puede combinar con otros flags de formato de salida (--json, --csv, etc.)")
 		}
 	}
@@ -87,6 +92,29 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 	}
 
 	return nil
+}
+
+// isAnyFormatFlagSet comprueba si se ha activado algún flag de formato de salida. <<< NUEVA FUNCIÓN HELPER
+func isAnyFormatFlagSet(cfg *config.ResolvedConfig) bool {
+	return cfg.JSONOutput || cfg.CSVOutput || cfg.Quiet || cfg.Plain
+}
+
+// countFormatFlags cuenta cuántos flags de formato de salida están activos. <<< FUNCIÓN HELPER REFACTORIZADA
+func countFormatFlags(cfg *config.ResolvedConfig) int {
+	count := 0
+	if cfg.JSONOutput {
+		count++
+	}
+	if cfg.CSVOutput {
+		count++
+	}
+	if cfg.Quiet {
+		count++
+	}
+	if cfg.Plain {
+		count++
+	}
+	return count
 }
 
 // ParseBandwidth convierte un string como "1M" o "256k" a un valor int64 de bits por segundo.

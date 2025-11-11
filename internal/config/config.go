@@ -33,8 +33,11 @@ type ScanConfig struct {
 }
 
 type MonitorConfig struct {
-	Enabled  bool          `yaml:"enabled"`
-	Interval time.Duration `yaml:"interval"`
+	Enabled          bool          `yaml:"enabled"`
+	Interval         time.Duration `yaml:"interval"`
+	RemovalThreshold time.Duration `yaml:"removal-threshold"`
+	WebhookURL       string        `yaml:"webhook-url"`
+	WebhookHeaders   []string      `yaml:"webhook-headers"`
 }
 
 type OutputConfig struct {
@@ -101,11 +104,13 @@ type ResolvedConfig struct {
 	MACFilePath      string
 	PcapSaveFile     string
 	StateFilePath    string
+	ExcludeFilePath  string
 
 	// Interface & Targets
-	IfaceName   string
-	UseLocalnet bool
-	Numeric     bool
+	IfaceName      string
+	UseLocalnet    bool
+	Numeric        bool
+	ExcludeTargets []string
 
 	// Scan Timing & Control
 	ScanTimeout   time.Duration
@@ -118,12 +123,16 @@ type ResolvedConfig struct {
 	RandomSeed    int64
 
 	// Spoofing
-	SpoofTargetIP string
-	GatewayIP     string
+	SpoofTargetIP        string
+	GatewayIP            string
+	DetectPromiscTargetIP string // <<< NUEVO CAMPO
 
 	// Monitoring
-	MonitorMode     bool
-	MonitorInterval time.Duration
+	MonitorMode             bool
+	MonitorInterval         time.Duration
+	MonitorRemovalThreshold time.Duration
+	WebhookURL              string
+	WebhookHeaders          []string
 
 	// Packet Manipulation
 	ArpSPA       string
