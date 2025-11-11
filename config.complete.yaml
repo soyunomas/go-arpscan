@@ -1,13 +1,13 @@
-################################################################################
-#                                                                              #
-#         Fichero de Configuración de Referencia Completa para go-arpscan      #
-#                                                                              #
-#  Este fichero documenta TODAS las opciones configurables.                     #
-#  Cópialo a ~/.config/go-arpscan/config.yaml y ajusta los valores que necesites#
-#                                                                              #
-#  REGLA DE ORO: Los flags en la línea de comandos SIEMPRE tienen prioridad.   #
-#                                                                              #
-################################################################################
+##################################################################################
+#                                                                                #
+#         Fichero de Configuración de Referencia Completa para go-arpscan        #
+#                                                                                #
+#  Este fichero documenta TODAS las opciones configurables.                      #
+#  Cópialo a ~/.config/go-arpscan/config.yaml y ajusta los valores que necesites #
+#                                                                                #
+#  REGLA DE ORO: Los flags en la línea de comandos SIEMPRE tienen prioridad.     #
+#                                                                                #
+##################################################################################
 
 # --- PREFERENCIAS GENERALES ---
 
@@ -53,6 +53,17 @@ scan:
 
   # Aleatorizar el orden de los hosts a escanear (-R, --random).
   random: false
+
+# --- MODO MONITOR POR DEFECTO ---
+# El modo monitor debe activarse explícitamente con --monitor.
+# Aquí puedes configurar sus parámetros por defecto.
+monitor:
+  # Activa el modo monitor por defecto. No recomendado para uso general.
+  # enabled: false
+
+  # Intervalo entre sondeos activos en modo monitor (--monitor-interval).
+  interval: "5m"
+
 
 # --- FORMATO DE SALIDA POR DEFECTO ---
 
