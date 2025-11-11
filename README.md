@@ -9,6 +9,7 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 ## Características Principales
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
+*   📡 **Monitorización Continua de Red (`--monitor`)**: Opera como un sensor de red persistente, combinando escucha pasiva y sondeos activos para detectar nuevos dispositivos, conflictos de IP y hosts desconectados en tiempo real, generando una salida de eventos en formato JSON.
 *   ⚔️ **Módulo de Ataque Man-in-the-Middle**: Realiza ataques de suplantación ARP (`--spoof`) para interceptar tráfico entre dos objetivos, con gestión automática del reenvío de paquetes y limpieza segura.
 *   ✨ **Auto-Detección Inteligente**: Detecta automáticamente la interfaz de red a utilizar si no se especifica una.
 *   ⚙️ **Gestión Centralizada con Ficheros de Configuración**:
@@ -86,6 +87,19 @@ sudo ./go-arpscan --localnet --state-file network_baseline.json
 # Paso 2: Días después, ejecutar un nuevo escaneo en modo 'diff' para ver qué ha cambiado.
 # Se mostrarán los hosts añadidos, eliminados o cuya MAC ha cambiado.
 sudo ./go-arpscan --localnet --diff --state-file network_baseline.json --progress
+```
+
+### Monitorización Continua
+
+Activa el modo `--monitor` para convertir `go-arpscan` en un sensor de red. La herramienta realizará un escaneo inicial y luego monitorizará el tráfico ARP y realizará sondeos periódicos para detectar cambios. La salida es una secuencia de eventos en formato JSON, ideal para ser procesada por otras herramientas como `jq` o enviada a un sistema de logging.
+
+```bash
+# Monitorizar la red local con sondeos activos cada 10 minutos
+sudo ./go-arpscan --localnet --monitor --monitor-interval 10m
+
+# Ejemplo de procesamiento de eventos en tiempo real con jq
+sudo ./go-arpscan --localnet --monitor | jq -r \
+  'select(.event == "NEW_HOST") | "NUEVO HOST ==> IP: \(.ip), MAC: \(.mac), Vendor: \(.vendor)"'
 ```
 
 ### Explotación Activa (Ataque Man-in-the-Middle)
@@ -166,6 +180,17 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 [~] MODIFICADO:  192.168.24.10
 	  - MAC ANTERIOR: aa:bb:cc:00:00:01 (Dell Inc.)
 	  + MAC NUEVA:    aa:bb:cc:00:00:02 (Raspberry Pi Foundation)
+
+# Salida del modo --monitor
+$ sudo ./go-arpscan --localnet --monitor
+2025/11/10 12:00:00 Iniciando modo monitor en la interfaz eno1. Presione Ctrl+C para salir.
+2025/11/10 12:00:00 Realizando escaneo inicial para establecer la línea base de la red...
+{"timestamp":"2025-11-10T12:00:02Z","event":"NEW_HOST","ip":"192.168.1.1","mac":"aa:bb:cc:00:01:01","vendor":"RouterCo"}
+{"timestamp":"2025-11-10T12:00:03Z","event":"NEW_HOST","ip":"192.168.1.10","mac":"aa:bb:cc:00:02:02","vendor":"Apple, Inc."}
+...
+2025/11/10 12:00:05 Línea base establecida. 2 hosts activos detectados. Iniciando monitorización continua.
+{"timestamp":"2025-11-10T12:03:15Z","event":"NEW_HOST","ip":"192.168.1.15","mac":"aa:bb:cc:00:03:03","vendor":"Samsung Electronics"}
+{"timestamp":"2025-11-10T12:05:22Z","event":"IP_CONFLICT","ip":"192.168.1.10","mac":"aa:bb:cc:00:04:04","vendor":"Dell Inc.","notes":"La MAC cambió de aa:bb:cc:00:02:02 a aa:bb:cc:00:04:04."}
 ```
 
 ### Lista Completa de Parámetros
@@ -189,6 +214,9 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | | **--- Explotación Activa ---** | | | |
 | | `--spoof` | `string` | Activa el modo de suplantación ARP contra una IP objetivo. | `""` |
 | | `--gateway` | `string` | Especifica la IP del gateway para el ataque de suplantación (`--spoof`). | `""` |
+| | **--- Monitorización Continua ---** | | | |
+| | `--monitor` | `bool` | Activa el modo monitor para detectar cambios en la red en tiempo real. | `false` |
+| | `--monitor-interval` | `duration` | Intervalo para los sondeos activos en modo monitor (e.g., '10m', '1h'). | `5m` |
 | | **--- Manipulación de Paquetes ---** | | | |
 | `-s` | `--arpspa` | `string` | Dirección IP de origen a usar en los paquetes ARP. | IP de la interfaz |
 | `-u` | `--arpsha` | `string` | Dirección MAC de origen a usar en el paquete ARP (SHA). | MAC de la interfaz |
@@ -263,6 +291,7 @@ $ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
 | Perfiles Tácticos | *(No disponible)* | `--profile=<s>` | 💡 **Nuevo**. Activa conjuntos de parámetros predefinidos para mimetismo, evasión, etc. |
 | Barra de Progreso | *(No disponible)* | `--progress` | 💡 **Nuevo**. Feedback visual inmediato en escaneos largos. |
 | Auditoría de Red | *(No disponible)* | `--state-file`, `--diff` | 💡 **Nuevo**. Permite guardar y comparar escaneos para detectar cambios en la red. |
+| Monitorización Continua | *(No disponible)* | `--monitor` | 💡 **Nuevo**. Opera como un sensor de red para la detección de cambios en tiempo real. |
 | **Manipulación de Paquetes** | | | |
 | Fichero OUI | `--ouifile=<s>`, `-O <s>` | `--ouifile=<s>`, `-O <s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente si no existe. |
 | Fichero IAB | `--iabfile=<s>` | `--iabfile=<s>` | ✨ **Mejorado**. `go-arpscan` descarga el fichero automáticamente. |
@@ -378,14 +407,14 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
     *   `--report-html <fichero.html>`: Genera un informe HTML con un resumen, tablas de resultados y hallazgos clave.
     *   `--report-md <fichero.md>`: Genera un informe en formato Markdown para una fácil integración en wikis y documentación.
 
-### [🔲] Fase 8: Monitorización Continua e Integración como Sensor de Red
+### [🚧] Fase 8: Monitorización Continua e Integración como Sensor de Red (EN CURSO)
 
 *Objetivo: Evolucionar `go-arpscan` a una herramienta de defensa activa (Blue Team), capaz de operar como un sensor de red distribuido y de integrarse con ecosistemas de seguridad más amplios (SIEM, SOAR).*
 
 **Paso 8.1: Detección de Amenazas en Tiempo Real**
-*   [🔲] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva de tráfico ARP (ej. Gratuitous ARP) con sondeos activos periódicos para mantener un estado actualizado de la red.
+*   [✅] **Modo Monitor (`--monitor`)**: Implementar un modo de ejecución persistente que combine escucha pasiva de tráfico ARP (ej. Gratuitous ARP) con sondeos activos periódicos para mantener un estado actualizado de la red.
     *   **Salida de Eventos en JSON**: Generará logs estructurados para cada evento significativo, facilitando su ingesta por sistemas automatizados: `{"event": "NEW_HOST", "data": {...}}`, `{"event": "IP_CONFLICT", "data": {...}}`.
-    *   **Detección de ARP Spoofing**: Añadir heurísticas avanzadas para detectar ataques de suplantación en tiempo real. Esto incluye la detección de "MAC Flapping" (cambios rápidos de la MAC asociada a una IP clave como el gateway).
+*   [🔲] **Detección de ARP Spoofing**: Añadir heurísticas avanzadas para detectar ataques de suplantación en tiempo real. Esto incluye la detección de "MAC Flapping" (cambios rápidos de la MAC asociada a una IP clave como el gateway).
 
 **Paso 8.2: Integración con Ecosistemas de Orquestación**
 *   [🔲] **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: En el modo `--monitor`, añadir la capacidad de publicar eventos directamente a un broker MQTT, convirtiendo cada instancia de `go-arpscan` en un sensor de bajo coste para sistemas internos, IoT u OT.
