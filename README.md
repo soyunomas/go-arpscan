@@ -114,9 +114,13 @@ sudo ./go-arpscan --localnet --monitor | jq -r \
 **ADVERTENCIA:** Usa esta funcionalidad de forma ética y solo en redes para las que tengas permiso explícito.
 
 ```bash
-# Interceptar el tráfico entre el host 192.168.1.100 y el gateway 192.168.1.1
+# Ataque estándar: Interceptar el tráfico entre el host 192.168.1.100 y el gateway 192.168.1.1
 # La herramienta gestiona el reenvío de paquetes para que la víctima no pierda la conexión.
 sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1
+
+# Ataque sigiloso: Interceptar el tráfico con menos frecuencia para evitar la detección
+# Los paquetes de envenenamiento se envían cada 30 segundos en lugar de cada 2.
+sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1 --spoof-interval 30s
 ```
 *En otra terminal, puedes usar `wireshark` o `tcpdump` para ver el tráfico interceptado en la interfaz `eno1`.*
 
@@ -223,6 +227,10 @@ $ sudo ./go-arpscan --localnet --monitor
 | | **--- Explotación Activa ---** | | | |
 | | `--spoof` | `string` | Activa el modo de suplantación ARP contra una IP objetivo. | `""` |
 | | `--gateway` | `string` | Especifica la IP del gateway para el ataque de suplantación (`--spoof`). | `""` |
+| | `--spoof-interval` | `duration` | Intervalo entre paquetes en el modo de suplantación. | `2s` |
+| | `--spoof-mac-timeout` | `duration` | Timeout para obtener las MACs en el modo de suplantación. | `3s` |
+| | `--spoof-restore-duration` | `duration` | Duración de la fase de restauración de caché ARP. | `1s` |
+| | `--spoof-restore-interval` | `duration` | Intervalo de los paquetes de restauración de caché ARP. | `100ms` |
 | | `--detect-promisc` | `string` | Detecta si un host está en modo promiscuo. | `""` |
 | | **--- Monitorización Continua ---** | | | |
 | | `--monitor` | `bool` | Activa el modo monitor para detectar cambios en la red en tiempo real. | `false` |
@@ -390,8 +398,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Ataque de Suplantación ARP (`--spoof`)**: Realiza ataques de Man-in-the-Middle para la interceptación de tráfico.
 *   [✅] **Implementación de Perfiles (`--profile`)**: Activa conjuntos de parámetros predefinidos para mimetismo, evasión y pruebas de seguridad.
 *   [✅] **Detección de Modos Promiscuos (`--detect-promisc`)**: Identifica sniffers en la red mediante el envío de paquetes ARP con MAC de destino incorrecta.
-*   `[🔲]` **Huella Digital Pasiva por Patrones de Tráfico (`--fingerprint-l2`)**: Analiza tráfico de broadcast (DHCP, NBNS, MDNS) para identificar dispositivos sin enviar paquetes dirigidos.
-
+  
 ### ✅ Fase 7: Flujos de Trabajo Profesionales y Seguridad Operacional (COMPLETADO)
 
 *Objetivo: Solidificar `go-arpscan` como una herramienta profesional indispensable, añadiendo características centradas en la precisión quirúrgica y la eficiencia del flujo de trabajo del pentester.*
@@ -432,4 +439,3 @@ Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la 
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el fichero `LICENSE` para más detalles.
-```
