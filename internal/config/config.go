@@ -13,6 +13,7 @@ type AppConfig struct {
 	Scan      ScanConfig     `yaml:"scan"`
 	Monitor   MonitorConfig  `yaml:"monitor"`
 	Output    OutputConfig   `yaml:"output"`
+	Spoofing  SpoofingConfig `yaml:"spoofing"` // <<< NUEVA SECCIÓN
 	Advanced  AdvancedConfig `yaml:"advanced"`
 	Files     FilePaths      `yaml:"files"`
 }
@@ -45,6 +46,15 @@ type OutputConfig struct {
 	RTT     bool   `yaml:"rtt"`
 	Numeric bool   `yaml:"numeric"`
 }
+
+// <<< INICIO DE NUEVA STRUCT PARA SPOOFING >>>
+type SpoofingConfig struct {
+	Interval        time.Duration `yaml:"interval"`
+	MACTimeout      time.Duration `yaml:"mac-timeout"`
+	RestoreDuration time.Duration `yaml:"restore-duration"`
+	RestoreInterval time.Duration `yaml:"restore-interval"`
+}
+// <<< FIN DE NUEVA STRUCT PARA SPOOFING >>>
 
 type AdvancedConfig struct {
 	Vlan       int    `yaml:"vlan"`
@@ -123,9 +133,15 @@ type ResolvedConfig struct {
 	RandomSeed    int64
 
 	// Spoofing
-	SpoofTargetIP        string
-	GatewayIP            string
-	DetectPromiscTargetIP string // <<< NUEVO CAMPO
+	SpoofTargetIP         string
+	GatewayIP             string
+	DetectPromiscTargetIP string
+	// <<< INICIO DE NUEVOS CAMPOS EN RESOLVEDCONFIG >>>
+	SpoofInterval         time.Duration
+	MACRequestTimeout     time.Duration
+	RestoreDuration       time.Duration
+	RestoreInterval       time.Duration
+	// <<< FIN DE NUEVOS CAMPOS EN RESOLVEDCONFIG >>>
 
 	// Monitoring
 	MonitorMode             bool

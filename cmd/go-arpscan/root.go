@@ -48,7 +48,7 @@ Es necesario ejecutar go-arpscan como root.`,
   sudo ./go-arpscan --profile=stealth-scan-generic --localnet
   sudo ./go-arpscan -i eth0 --spoof 192.168.1.10 --gateway 192.168.1.1
   sudo ./go-arpscan --localnet --monitor --monitor-interval 5m
-  sudo ./go-arpscan --detect-promisc 192.168.1.50`, // <<< EJEMPLO AÑADIDO
+  sudo ./go-arpscan --detect-promisc 192.168.1.50`,
 
 	// PersistentPreRun se ejecuta después de parsear los flags pero antes de Run.
 	// Es el lugar ideal para cargar y validar la configuración.
@@ -139,7 +139,13 @@ func init() {
 	// --- Explotación Activa ---
 	rootCmd.Flags().String("spoof", "", "Activa el modo de suplantación ARP contra una IP objetivo.")
 	rootCmd.Flags().String("gateway", "", "Especifica la IP del gateway para el ataque de suplantación (--spoof).")
-	rootCmd.Flags().String("detect-promisc", "", "Detecta si un host está en modo promiscuo enviando un paquete ARP con MAC de destino incorrecta.") // <<< NUEVO FLAG
+	rootCmd.Flags().String("detect-promisc", "", "Detecta si un host está en modo promiscuo enviando un paquete ARP con MAC de destino incorrecta.")
+	// <<< INICIO DE NUEVOS FLAGS PARA SPOOFING >>>
+	rootCmd.Flags().Duration("spoof-interval", 2*time.Second, "Intervalo entre paquetes en el modo de suplantación.")
+	rootCmd.Flags().Duration("spoof-mac-timeout", 3*time.Second, "Timeout para obtener las MACs en el modo de suplantación.")
+	rootCmd.Flags().Duration("spoof-restore-duration", 1*time.Second, "Duración de la fase de restauración de caché ARP.")
+	rootCmd.Flags().Duration("spoof-restore-interval", 100*time.Millisecond, "Intervalo de los paquetes de restauración de caché ARP.")
+	// <<< FIN DE NUEVOS FLAGS PARA SPOOFING >>>
 
 	// --- Manipulación de Paquetes (Avanzado) ---
 	rootCmd.Flags().StringP("arpspa", "s", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred. Valor especial: \"dest\" para usar la IP de destino.")
