@@ -85,6 +85,23 @@ output:
   # No realizar resolución de nombres de host (DNS) (-N, --numeric).
   numeric: false
 
+# --- EXPLOTACIÓN ACTIVA Y SUPLANTACIÓN (AVANZADO) ---
+# Parámetros para ajustar el comportamiento del modo --spoof.
+# Modificar solo si se sabe lo que se está haciendo.
+spoofing:
+  # Intervalo entre el envío de paquetes de envenenamiento ARP (--spoof-interval).
+  # Un valor bajo es más agresivo pero más "ruidoso".
+  interval: "2s"
+
+  # Timeout para esperar la respuesta MAC de la víctima y el gateway (--spoof-mac-timeout).
+  mac-timeout: "3s"
+
+  # Duración total del proceso de restauración de caché al salir (--spoof-restore-duration).
+  restore-duration: "1s"
+
+  # Intervalo entre paquetes durante la fase de restauración (--spoof-restore-interval).
+  restore-interval: "100ms"
+
 # --- CONFIGURACIÓN AVANZADA Y MANIPULACIÓN DE PAQUETES ---
 # Opciones para administradores de red, pentesters y casos de uso específicos.
 
