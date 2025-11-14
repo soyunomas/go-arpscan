@@ -338,29 +338,35 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 				continue
 			}
 
+			// <<< INICIO DE LA LÓGICA CORREGIDA >>>
 			target.mu.Lock()
 			var rtt time.Duration
 			if !target.LastSent.IsZero() {
 				rtt = time.Since(target.LastSent)
 			}
 
+			// Marcamos el objetivo como respondido en la primera respuesta.
+			// Esto es importante para que el bucle principal de escaneo sepa
+			// que no necesita seguir enviando paquetes a este objetivo.
 			if target.Status != StatusReplied {
 				target.Status = StatusReplied
-				target.mu.Unlock()
-
 				if cfg.Verbosity >= 2 {
 					log.Printf("Primera respuesta de %s. Marcado como respondido.", srcIPStr)
 				}
-				vendor := cfg.VendorDB.Lookup(srcMACStr)
-				results <- ScanResult{
-					IP:     srcIPStr,
-					MAC:    srcMACStr,
-					RTT:    rtt,
-					Vendor: vendor,
-				}
-			} else {
-				target.mu.Unlock()
 			}
+			target.mu.Unlock()
+
+			// ¡LA CLAVE! Enviamos CADA resultado al canal de procesamiento,
+			// permitiendo que la capa superior se encargue de la lógica de
+			// conflictos y duplicados.
+			vendor := cfg.VendorDB.Lookup(srcMACStr)
+			results <- ScanResult{
+				IP:     srcIPStr,
+				MAC:    srcMACStr,
+				RTT:    rtt,
+				Vendor: vendor,
+			}
+			// <<< FIN DE LA LÓGICA CORREGIDA >>>
 		}
 	}
 }
