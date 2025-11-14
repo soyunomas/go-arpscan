@@ -420,7 +420,6 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *Objetivo: Solidificar `go-arpscan` como una herramienta profesional indispensable, añadiendo características centradas en la precisión quirúrgica y la eficiencia del flujo de trabajo del pentester.*
 
 *   [✅] **Listas de Exclusión (`--exclude`, `--exclude-file`)**: Asegura que la herramienta opere con precisión, cumpliendo con las Reglas del Enfrentamiento al evitar sistemas críticos.
-*   `[🔲]` **Módulo de Generación de Informes (`--report-html`, `--report-md`)**: Genera informes profesionales directamente desde los resultados del escaneo para agilizar la entrega de resultados.
 
 ### ✅ Fase 8: Monitorización Continua e Integración como Sensor de Red (COMPLETADO)
 
@@ -429,7 +428,6 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Modo Monitor (`--monitor`)**: Opera como un sensor persistente para la detección de cambios en la red en tiempo real.
 *   [✅] **Integración Nativa con Webhooks (`--webhook-url`)**: Conecta con ecosistemas de SecOps (Slack, SOARs) enviando eventos a endpoints HTTP con cabeceras de autenticación.
 *   [✅] **Detección Avanzada de Anomalías ARP (`--detect-arp-spoofing`)**: Amplía el modo monitor para clasificar cambios como potencialmente maliciosos (e.g., MAC flapping del gateway).
-*   `[🔲]` **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: Permite la integración con brokers de mensajería para arquitecturas de sensores distribuidos a gran escala.
 
 ## Aviso Legal y de Responsabilidad
 
