@@ -29,7 +29,7 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 		}
 	}
 
-	// Validar modo de detección promiscuo (--detect-promisc) <<< NUEVO BLOQUE
+	// Validar modo de detección promiscuo (--detect-promisc)
 	if cfg.DetectPromiscTargetIP != "" {
 		if cfg.UseLocalnet || cfg.FilePath != "" || len(args) > 0 {
 			return fmt.Errorf("el modo --detect-promisc no se puede combinar con --localnet, --file o objetivos en la línea de comandos")
@@ -58,6 +58,21 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 			return fmt.Errorf("el modo --monitor no es compatible con otros flags de formato de salida (--json, --csv, etc.)")
 		}
 	}
+
+	// <<< INICIO DE NUEVO BLOQUE DE VALIDACIÓN PARA DETECCIÓN DE SPOOFING >>>
+	// Validar dependencias de la detección de suplantación ARP
+	if cfg.DetectArpSpoofing {
+		if !cfg.MonitorMode {
+			return fmt.Errorf("el flag --detect-arp-spoofing solo es válido en modo --monitor")
+		}
+		if cfg.MonitorGatewayIP == "" {
+			return fmt.Errorf("--detect-arp-spoofing requiere que se especifique una IP de gateway con --monitor-gateway")
+		}
+	}
+	if cfg.MonitorGatewayIP != "" && !cfg.DetectArpSpoofing {
+		return fmt.Errorf("el flag --monitor-gateway solo es válido cuando se usa --detect-arp-spoofing")
+	}
+	// <<< FIN DE NUEVO BLOQUE DE VALIDACIÓN >>>
 
 	// Validar dependencias del webhook
 	if (cfg.WebhookURL != "" || len(cfg.WebhookHeaders) > 0) && !cfg.MonitorMode {
@@ -94,12 +109,12 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 	return nil
 }
 
-// isAnyFormatFlagSet comprueba si se ha activado algún flag de formato de salida. <<< NUEVA FUNCIÓN HELPER
+// isAnyFormatFlagSet comprueba si se ha activado algún flag de formato de salida.
 func isAnyFormatFlagSet(cfg *config.ResolvedConfig) bool {
 	return cfg.JSONOutput || cfg.CSVOutput || cfg.Quiet || cfg.Plain
 }
 
-// countFormatFlags cuenta cuántos flags de formato de salida están activos. <<< FUNCIÓN HELPER REFACTORIZADA
+// countFormatFlags cuenta cuántos flags de formato de salida están activos.
 func countFormatFlags(cfg *config.ResolvedConfig) int {
 	count := 0
 	if cfg.JSONOutput {

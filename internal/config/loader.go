@@ -207,13 +207,20 @@ func applyAppConfig(cmd *cobra.Command, cfg *ResolvedConfig, baseCfg *AppConfig)
 	if !cmd.Flags().Changed("monitor-removal-threshold") && baseCfg.Monitor.RemovalThreshold > 0 {
 		cfg.MonitorRemovalThreshold = baseCfg.Monitor.RemovalThreshold
 	}
+	// <<< INICIO DE LECTURA DE CONFIG DE SPOOFING DESDE YAML >>>
+	if !cmd.Flags().Changed("detect-arp-spoofing") && baseCfg.Monitor.DetectArpSpoofing {
+		cfg.DetectArpSpoofing = true
+	}
+	if !cmd.Flags().Changed("monitor-gateway") && baseCfg.Monitor.Gateway != "" {
+		cfg.MonitorGatewayIP = baseCfg.Monitor.Gateway
+	}
+	// <<< FIN DE LECTURA DE CONFIG DE SPOOFING DESDE YAML >>>
 	if !cmd.Flags().Changed("webhook-url") && baseCfg.Monitor.WebhookURL != "" {
 		cfg.WebhookURL = baseCfg.Monitor.WebhookURL
 	}
 	if !cmd.Flags().Changed("webhook-header") && len(baseCfg.Monitor.WebhookHeaders) > 0 {
 		cfg.WebhookHeaders = baseCfg.Monitor.WebhookHeaders
 	}
-	// <<< INICIO DE LECTURA DE SPOOFING DESDE YAML >>>
 	if !cmd.Flags().Changed("spoof-interval") && baseCfg.Spoofing.Interval > 0 {
 		cfg.SpoofInterval = baseCfg.Spoofing.Interval
 	}
@@ -226,7 +233,6 @@ func applyAppConfig(cmd *cobra.Command, cfg *ResolvedConfig, baseCfg *AppConfig)
 	if !cmd.Flags().Changed("spoof-restore-interval") && baseCfg.Spoofing.RestoreInterval > 0 {
 		cfg.RestoreInterval = baseCfg.Spoofing.RestoreInterval
 	}
-	// <<< FIN DE LECTURA DE SPOOFING DESDE YAML >>>
 	if !cmd.Flags().Changed("rtt") && baseCfg.Output.RTT {
 		cfg.ShowRTT = true
 	}
@@ -404,15 +410,17 @@ func loadFinalValuesFromFlags(cmd *cobra.Command, cfg *ResolvedConfig) {
 	cfg.SpoofTargetIP, _ = cmd.Flags().GetString("spoof")
 	cfg.GatewayIP, _ = cmd.Flags().GetString("gateway")
 	cfg.DetectPromiscTargetIP, _ = cmd.Flags().GetString("detect-promisc")
-	// <<< INICIO DE LECTURA DE FLAGS DE SPOOFING >>>
 	cfg.SpoofInterval, _ = cmd.Flags().GetDuration("spoof-interval")
 	cfg.MACRequestTimeout, _ = cmd.Flags().GetDuration("spoof-mac-timeout")
 	cfg.RestoreDuration, _ = cmd.Flags().GetDuration("spoof-restore-duration")
 	cfg.RestoreInterval, _ = cmd.Flags().GetDuration("spoof-restore-interval")
-	// <<< FIN DE LECTURA DE FLAGS DE SPOOFING >>>
 	cfg.MonitorMode, _ = cmd.Flags().GetBool("monitor")
 	cfg.MonitorInterval, _ = cmd.Flags().GetDuration("monitor-interval")
 	cfg.MonitorRemovalThreshold, _ = cmd.Flags().GetDuration("monitor-removal-threshold")
+	// <<< INICIO DE LECTURA DE FLAGS DE SPOOFING DESDE LA CLI >>>
+	cfg.DetectArpSpoofing, _ = cmd.Flags().GetBool("detect-arp-spoofing")
+	cfg.MonitorGatewayIP, _ = cmd.Flags().GetString("monitor-gateway")
+	// <<< FIN DE LECTURA DE FLAGS DE SPOOFING DESDE LA CLI >>>
 	cfg.WebhookURL, _ = cmd.Flags().GetString("webhook-url")
 	cfg.WebhookHeaders, _ = cmd.Flags().GetStringSlice("webhook-header")
 	cfg.ArpSPA, _ = cmd.Flags().GetString("arpspa")

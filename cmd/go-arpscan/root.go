@@ -48,7 +48,8 @@ Es necesario ejecutar go-arpscan como root.`,
   sudo ./go-arpscan --profile=stealth-scan-generic --localnet
   sudo ./go-arpscan -i eth0 --spoof 192.168.1.10 --gateway 192.168.1.1
   sudo ./go-arpscan --localnet --monitor --monitor-interval 5m
-  sudo ./go-arpscan --detect-promisc 192.168.1.50`,
+  sudo ./go-arpscan --detect-promisc 192.168.1.50
+  sudo ./go-arpscan --localnet --monitor --detect-arp-spoofing --monitor-gateway 192.168.1.1`,
 
 	// PersistentPreRun se ejecuta después de parsear los flags pero antes de Run.
 	// Es el lugar ideal para cargar y validar la configuración.
@@ -140,12 +141,10 @@ func init() {
 	rootCmd.Flags().String("spoof", "", "Activa el modo de suplantación ARP contra una IP objetivo.")
 	rootCmd.Flags().String("gateway", "", "Especifica la IP del gateway para el ataque de suplantación (--spoof).")
 	rootCmd.Flags().String("detect-promisc", "", "Detecta si un host está en modo promiscuo enviando un paquete ARP con MAC de destino incorrecta.")
-	// <<< INICIO DE NUEVOS FLAGS PARA SPOOFING >>>
 	rootCmd.Flags().Duration("spoof-interval", 2*time.Second, "Intervalo entre paquetes en el modo de suplantación.")
 	rootCmd.Flags().Duration("spoof-mac-timeout", 3*time.Second, "Timeout para obtener las MACs en el modo de suplantación.")
 	rootCmd.Flags().Duration("spoof-restore-duration", 1*time.Second, "Duración de la fase de restauración de caché ARP.")
 	rootCmd.Flags().Duration("spoof-restore-interval", 100*time.Millisecond, "Intervalo de los paquetes de restauración de caché ARP.")
-	// <<< FIN DE NUEVOS FLAGS PARA SPOOFING >>>
 
 	// --- Manipulación de Paquetes (Avanzado) ---
 	rootCmd.Flags().StringP("arpspa", "s", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred. Valor especial: \"dest\" para usar la IP de destino.")
@@ -168,6 +167,10 @@ func init() {
 	rootCmd.Flags().Bool("monitor", false, "Activa el modo monitor para detectar cambios en la red en tiempo real.")
 	rootCmd.Flags().Duration("monitor-interval", 5*time.Minute, "Intervalo para los sondeos activos en modo monitor (e.g., '10m', '1h').")
 	rootCmd.Flags().Duration("monitor-removal-threshold", 15*time.Minute, "Tiempo de inactividad antes de que un host sea considerado 'eliminado' en modo monitor.")
+	// <<< INICIO DE NUEVOS FLAGS PARA DETECCIÓN DE SPOOFING >>>
+	rootCmd.Flags().Bool("detect-arp-spoofing", false, "Activa la detección de suplantación ARP en modo monitor. Requiere --monitor-gateway.")
+	rootCmd.Flags().String("monitor-gateway", "", "IP del gateway a proteger con --detect-arp-spoofing.")
+	// <<< FIN DE NUEVOS FLAGS PARA DETECCIÓN DE SPOOFING >>>
 	rootCmd.Flags().String("webhook-url", "", "URL del webhook para enviar eventos en modo monitor.")
 	rootCmd.Flags().StringSlice("webhook-header", nil, "Cabecera HTTP para la petición webhook (e.g., 'Auth: Bearer ...'). Se puede repetir.")
 

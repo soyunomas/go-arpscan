@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/gopacket" // <<< IMPORT AÑADIDO
+	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 )
@@ -37,15 +37,30 @@ type monitorHostInfo struct {
 	LastSeen time.Time
 }
 
+// <<< INICIO: CONSTANTES Y STRUCT DE EVENTOS MEJORADAS >>>
+const (
+	EventNewHost             = "NEW_HOST"
+	EventHostReturned        = "HOST_RETURNED"
+	EventHostInactive        = "HOST_INACTIVE"
+	EventIPConflict          = "IP_CONFLICT"
+	EventHostRemoved         = "HOST_REMOVED"
+	EventGatewaySpoofDetected = "GATEWAY_SPOOF_DETECTED"
+)
+
 // MonitorEvent define la estructura de un evento de red para la salida JSON.
 type MonitorEvent struct {
-	Timestamp string `json:"timestamp"`
-	Event     string `json:"event"` // e.g., "NEW_HOST", "HOST_RETURNED", "HOST_INACTIVE", "IP_CONFLICT", "HOST_REMOVED"
-	IP        string `json:"ip"`
-	MAC       string `json:"mac"`
-	Vendor    string `json:"vendor"`
-	Notes     string `json:"notes,omitempty"`
+	Timestamp     string `json:"timestamp"`
+	Event         string `json:"event"`
+	IP            string `json:"ip"`
+	MAC           string `json:"mac"`
+	Vendor        string `json:"vendor"`
+	Notes         string `json:"notes,omitempty"`
+	Severity      string `json:"severity,omitempty"`
+	LegitimateMAC string `json:"legitimate_mac,omitempty"`
+	AttackerMAC   string `json:"attacker_mac,omitempty"`
 }
+
+// <<< FIN: CONSTANTES Y STRUCT DE EVENTOS MEJORADAS >>>
 
 // dispatchEvent gestiona el envío de un evento tanto a la salida estándar como a un webhook.
 func (r *Runner) dispatchEvent(event MonitorEvent) {
@@ -110,6 +125,11 @@ func (r *Runner) runMonitorMode() error {
 	knownHosts := make(map[string]*monitorHostInfo) // Usamos punteros para poder modificar in-place.
 	arpPackets := make(chan *layers.ARP)
 
+	// <<< INICIO: VARIABLES PARA DETECCIÓN DE SPOOFING >>>
+	var monitoredGatewayIP net.IP
+	var monitoredGatewayMAC net.HardwareAddr
+	// <<< FIN: VARIABLES PARA DETECCIÓN DE SPOOFING >>>
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -136,8 +156,25 @@ func (r *Runner) runMonitorMode() error {
 			LastSeen: time.Now(),
 		}
 		knownHosts[result.IP] = info
-		r.dispatchEvent(MonitorEvent{Event: "NEW_HOST", IP: result.IP, MAC: info.MAC, Vendor: info.Vendor})
+		r.dispatchEvent(MonitorEvent{Event: EventNewHost, IP: result.IP, MAC: info.MAC, Vendor: info.Vendor})
 	}
+
+	// <<< INICIO: LÓGICA DE LÍNEA BASE PARA EL GATEWAY >>>
+	if r.cfg.DetectArpSpoofing {
+		monitoredGatewayIP = net.ParseIP(r.cfg.MonitorGatewayIP)
+		if gwInfo, found := knownHosts[r.cfg.MonitorGatewayIP]; found {
+			var err error
+			monitoredGatewayMAC, err = net.ParseMAC(gwInfo.MAC)
+			if err != nil {
+				log.Fatalf("Error crítico: no se pudo parsear la MAC del gateway '%s' durante la inicialización.", gwInfo.MAC)
+			}
+			log.Printf("Protección de suplantación ARP activada para el gateway %s -> %s", monitoredGatewayIP, monitoredGatewayMAC)
+		} else {
+			log.Fatalf("Error crítico: El gateway especificado %s no fue encontrado en el escaneo inicial. No se puede activar la protección.", r.cfg.MonitorGatewayIP)
+		}
+	}
+	// <<< FIN: LÓGICA DE LÍNEA BASE PARA EL GATEWAY >>>
+
 	log.Printf("Línea base establecida. %d hosts activos detectados. Iniciando monitorización continua.", len(knownHosts))
 
 	ticker := time.NewTicker(r.cfg.MonitorInterval)
@@ -150,38 +187,57 @@ func (r *Runner) runMonitorMode() error {
 			return nil
 
 		case arpPacket := <-arpPackets:
-			srcIP := net.IP(arpPacket.SourceProtAddress).String()
-			srcMAC := net.HardwareAddr(arpPacket.SourceHwAddress).String()
+			srcIP := net.IP(arpPacket.SourceProtAddress)
+			srcIPStr := srcIP.String()
+			srcMAC := net.HardwareAddr(arpPacket.SourceHwAddress)
+			srcMACStr := srcMAC.String()
 
-			if knownInfo, ok := knownHosts[srcIP]; ok {
+			// <<< INICIO: HEURÍSTICA DE DETECCIÓN PASIVA >>>
+			if r.cfg.DetectArpSpoofing && monitoredGatewayIP.Equal(srcIP) && !bytes.Equal(monitoredGatewayMAC, srcMAC) {
+				attackerVendor := r.scanConfig.VendorDB.Lookup(srcMACStr)
+				r.dispatchEvent(MonitorEvent{
+					Event:         EventGatewaySpoofDetected,
+					Severity:      "CRITICAL",
+					IP:            srcIPStr,
+					MAC:           srcMACStr, // MAC del paquete, que es la del atacante
+					Vendor:        attackerVendor,
+					Notes:         "Se detectó un anuncio ARP pasivo para el gateway desde una MAC no autorizada.",
+					LegitimateMAC: monitoredGatewayMAC.String(),
+					AttackerMAC:   srcMACStr,
+				})
+				// Continuamos para que el host atacante (si es nuevo) también sea registrado.
+			}
+			// <<< FIN: HEURÍSTICA DE DETECCIÓN PASIVA >>>
+
+			if knownInfo, ok := knownHosts[srcIPStr]; ok {
 				// El host es conocido, actualizamos su estado.
 				knownInfo.LastSeen = time.Now()
-				if knownInfo.MAC != srcMAC {
+				if knownInfo.MAC != srcMACStr {
 					oldMAC := knownInfo.MAC
-					knownInfo.MAC = srcMAC
-					knownInfo.Vendor = r.scanConfig.VendorDB.Lookup(srcMAC)
+					knownInfo.MAC = srcMACStr
+					knownInfo.Vendor = r.scanConfig.VendorDB.Lookup(srcMACStr)
 					r.dispatchEvent(MonitorEvent{
-						Event:  "IP_CONFLICT",
-						IP:     srcIP,
+						Event:  EventIPConflict,
+						IP:     srcIPStr,
 						MAC:    knownInfo.MAC,
 						Vendor: knownInfo.Vendor,
-						Notes:  fmt.Sprintf("La MAC cambió de %s a %s (visto pasivamente).", oldMAC, srcMAC),
+						Notes:  fmt.Sprintf("La MAC cambió de %s a %s (visto pasivamente).", oldMAC, srcMACStr),
 					})
 				}
 				if knownInfo.State == HostStateInactive {
 					knownInfo.State = HostStateActive
-					r.dispatchEvent(MonitorEvent{Event: "HOST_RETURNED", IP: srcIP, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Visto pasivamente."})
+					r.dispatchEvent(MonitorEvent{Event: EventHostReturned, IP: srcIPStr, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Visto pasivamente."})
 				}
 			} else {
 				// El host es completamente nuevo.
 				info := &monitorHostInfo{
-					MAC:      srcMAC,
-					Vendor:   r.scanConfig.VendorDB.Lookup(srcMAC),
+					MAC:      srcMACStr,
+					Vendor:   r.scanConfig.VendorDB.Lookup(srcMACStr),
 					State:    HostStateActive,
 					LastSeen: time.Now(),
 				}
-				knownHosts[srcIP] = info
-				r.dispatchEvent(MonitorEvent{Event: "NEW_HOST", IP: srcIP, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado pasivamente."})
+				knownHosts[srcIPStr] = info
+				r.dispatchEvent(MonitorEvent{Event: EventNewHost, IP: srcIPStr, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado pasivamente."})
 			}
 
 		case <-ticker.C:
@@ -195,13 +251,30 @@ func (r *Runner) runMonitorMode() error {
 			// Actualizar estado de hosts conocidos basado en el sondeo
 			for ip, knownInfo := range knownHosts {
 				if newInfo, responded := currentScanHosts[ip]; responded {
+					// <<< INICIO: HEURÍSTICA DE DETECCIÓN ACTIVA >>>
+					if r.cfg.DetectArpSpoofing && ip == monitoredGatewayIP.String() && knownInfo.MAC != newInfo.MAC {
+						attackerVendor := r.scanConfig.VendorDB.Lookup(newInfo.MAC)
+						r.dispatchEvent(MonitorEvent{
+							Event:         EventGatewaySpoofDetected,
+							Severity:      "CRITICAL",
+							IP:            ip,
+							MAC:           newInfo.MAC,
+							Vendor:        attackerVendor,
+							Notes:         "Se detectó una respuesta ARP del gateway desde una MAC no autorizada durante el sondeo activo.",
+							LegitimateMAC: monitoredGatewayMAC.String(),
+							AttackerMAC:   newInfo.MAC,
+						})
+						// No actualizamos la MAC del gateway en nuestro estado, mantenemos la legítima.
+					}
+					// <<< FIN: HEURÍSTICA DE DETECCIÓN ACTIVA >>>
+
 					knownInfo.LastSeen = time.Now()
-					if knownInfo.MAC != newInfo.MAC {
+					if knownInfo.MAC != newInfo.MAC && ip != monitoredGatewayIP.String() { // Solo actualiza si no es el gateway protegido
 						oldMAC := knownInfo.MAC
 						knownInfo.MAC = newInfo.MAC
 						knownInfo.Vendor = newInfo.Vendor
 						r.dispatchEvent(MonitorEvent{
-							Event:  "IP_CONFLICT",
+							Event:  EventIPConflict,
 							IP:     ip,
 							MAC:    newInfo.MAC,
 							Vendor: newInfo.Vendor,
@@ -210,12 +283,12 @@ func (r *Runner) runMonitorMode() error {
 					}
 					if knownInfo.State == HostStateInactive {
 						knownInfo.State = HostStateActive
-						r.dispatchEvent(MonitorEvent{Event: "HOST_RETURNED", IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Respondió al sondeo activo."})
+						r.dispatchEvent(MonitorEvent{Event: EventHostReturned, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Respondió al sondeo activo."})
 					}
 				} else { // No respondió
 					if knownInfo.State == HostStateActive {
 						knownInfo.State = HostStateInactive
-						r.dispatchEvent(MonitorEvent{Event: "HOST_INACTIVE", IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "No respondió al sondeo activo."})
+						r.dispatchEvent(MonitorEvent{Event: EventHostInactive, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "No respondió al sondeo activo."})
 					}
 				}
 			}
@@ -223,7 +296,7 @@ func (r *Runner) runMonitorMode() error {
 			// Purgar hosts que han estado inactivos demasiado tiempo
 			for ip, knownInfo := range knownHosts {
 				if knownInfo.State == HostStateInactive && time.Since(knownInfo.LastSeen) > r.cfg.MonitorRemovalThreshold {
-					r.dispatchEvent(MonitorEvent{Event: "HOST_REMOVED", IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: fmt.Sprintf("Inactivo durante más de %v.", r.cfg.MonitorRemovalThreshold)})
+					r.dispatchEvent(MonitorEvent{Event: EventHostRemoved, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: fmt.Sprintf("Inactivo durante más de %v.", r.cfg.MonitorRemovalThreshold)})
 					delete(knownHosts, ip)
 				}
 			}
@@ -238,7 +311,7 @@ func (r *Runner) runMonitorMode() error {
 						LastSeen: time.Now(),
 					}
 					knownHosts[ip] = info
-					r.dispatchEvent(MonitorEvent{Event: "NEW_HOST", IP: ip, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado en sondeo activo."})
+					r.dispatchEvent(MonitorEvent{Event: EventNewHost, IP: ip, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado en sondeo activo."})
 				}
 			}
 			log.Println("Sondeo activo completado.")

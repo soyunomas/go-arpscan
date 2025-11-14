@@ -13,7 +13,7 @@ type AppConfig struct {
 	Scan      ScanConfig     `yaml:"scan"`
 	Monitor   MonitorConfig  `yaml:"monitor"`
 	Output    OutputConfig   `yaml:"output"`
-	Spoofing  SpoofingConfig `yaml:"spoofing"` // <<< NUEVA SECCIÓN
+	Spoofing  SpoofingConfig `yaml:"spoofing"`
 	Advanced  AdvancedConfig `yaml:"advanced"`
 	Files     FilePaths      `yaml:"files"`
 }
@@ -34,11 +34,13 @@ type ScanConfig struct {
 }
 
 type MonitorConfig struct {
-	Enabled          bool          `yaml:"enabled"`
-	Interval         time.Duration `yaml:"interval"`
-	RemovalThreshold time.Duration `yaml:"removal-threshold"`
-	WebhookURL       string        `yaml:"webhook-url"`
-	WebhookHeaders   []string      `yaml:"webhook-headers"`
+	Enabled             bool          `yaml:"enabled"`
+	Interval            time.Duration `yaml:"interval"`
+	RemovalThreshold    time.Duration `yaml:"removal-threshold"`
+	DetectArpSpoofing   bool          `yaml:"detect-arp-spoofing"` // <<< NUEVO CAMPO
+	Gateway             string        `yaml:"gateway"`             // <<< NUEVO CAMPO
+	WebhookURL          string        `yaml:"webhook-url"`
+	WebhookHeaders      []string      `yaml:"webhook-headers"`
 }
 
 type OutputConfig struct {
@@ -47,14 +49,12 @@ type OutputConfig struct {
 	Numeric bool   `yaml:"numeric"`
 }
 
-// <<< INICIO DE NUEVA STRUCT PARA SPOOFING >>>
 type SpoofingConfig struct {
 	Interval        time.Duration `yaml:"interval"`
 	MACTimeout      time.Duration `yaml:"mac-timeout"`
 	RestoreDuration time.Duration `yaml:"restore-duration"`
 	RestoreInterval time.Duration `yaml:"restore-interval"`
 }
-// <<< FIN DE NUEVA STRUCT PARA SPOOFING >>>
 
 type AdvancedConfig struct {
 	Vlan       int    `yaml:"vlan"`
@@ -136,17 +136,17 @@ type ResolvedConfig struct {
 	SpoofTargetIP         string
 	GatewayIP             string
 	DetectPromiscTargetIP string
-	// <<< INICIO DE NUEVOS CAMPOS EN RESOLVEDCONFIG >>>
 	SpoofInterval         time.Duration
 	MACRequestTimeout     time.Duration
 	RestoreDuration       time.Duration
 	RestoreInterval       time.Duration
-	// <<< FIN DE NUEVOS CAMPOS EN RESOLVEDCONFIG >>>
 
 	// Monitoring
 	MonitorMode             bool
 	MonitorInterval         time.Duration
 	MonitorRemovalThreshold time.Duration
+	DetectArpSpoofing       bool   // <<< NUEVO CAMPO
+	MonitorGatewayIP        string // <<< NUEVO CAMPO
 	WebhookURL              string
 	WebhookHeaders          []string
 
