@@ -10,6 +10,7 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
 *   📡 **Monitorización Continua de Red (`--monitor`)**: Opera como un sensor de red persistente, combinando escucha pasiva y sondeos activos para detectar nuevos dispositivos, conflictos de IP y hosts desconectados en tiempo real, generando una salida de eventos en formato JSON.
+*   🛡️ **Detección de Suplantación ARP (`--detect-arp-spoofing`)**: En modo monitor, vigila activamente la MAC del gateway y genera alertas de alta severidad si detecta un intento de suplantación.
 *   ⚔️ **Módulo de Ataque Man-in-the-Middle**: Realiza ataques de suplantación ARP (`--spoof`) para interceptar tráfico entre dos objetivos, con gestión automática del reenvío de paquetes y limpieza segura.
 *   ✨ **Auto-Detección Inteligente**: Detecta automáticamente la interfaz de red a utilizar si no se especifica una.
 *   ⚙️ **Gestión Centralizada con Ficheros de Configuración**:
@@ -104,6 +105,9 @@ sudo ./go-arpscan --localnet --monitor --monitor-interval 10m \
   --webhook-url "https://hooks.slack.com/services/T000/B000/XXXX" \
   --webhook-header "Content-Type: application/json"
 
+# Monitorizar la red y activar la detección de suplantación para el gateway 192.168.1.1
+sudo ./go-arpscan --localnet --monitor --detect-arp-spoofing --monitor-gateway 192.168.1.1
+
 # Ejemplo de procesamiento de eventos en tiempo real con jq
 sudo ./go-arpscan --localnet --monitor | jq -r \
   'select(.event == "NEW_HOST") | "NUEVO HOST ==> IP: \(.ip), MAC: \(.mac), Vendor: \(.vendor)"'
@@ -123,6 +127,14 @@ sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1
 sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1 --spoof-interval 30s
 ```
 *En otra terminal, puedes usar `wireshark` o `tcpdump` para ver el tráfico interceptado en la interfaz `eno1`.*
+
+### Una Nota Importante sobre las Pruebas de Seguridad
+
+Al probar funcionalidades de ataque (`--spoof`) y defensa (`--detect-arp-spoofing`), es crucial utilizar un **entorno de red realista con al menos dos máquinas distintas** (un atacante y una víctima/sensor).
+
+Realizar una prueba donde el atacante y la víctima son la misma máquina puede llevar a resultados inesperados. El kernel del sistema operativo, en un esfuerzo por ser eficiente, puede procesar los paquetes de red destinados a sí mismo internamente (vía loopback), evitando que salgan a la tarjeta de red física. Como resultado, un sensor que escucha en la tarjeta física (como `go-arpscan`) nunca verá el tráfico del ataque.
+
+Para una prueba fiable, siempre use una máquina separada (o una máquina virtual con su propia identidad de red) para lanzar el ataque contra la máquina donde se ejecuta el sensor.
 
 ## Ficheros de Configuración
 
@@ -202,6 +214,7 @@ $ sudo ./go-arpscan --localnet --monitor
 2025/11/10 12:00:05 Línea base establecida. 2 hosts activos detectados. Iniciando monitorización continua.
 {"timestamp":"2025-11-10T12:03:15Z","event":"NEW_HOST","ip":"192.168.1.15","mac":"aa:bb:cc:00:03:03","vendor":"Samsung Electronics"}
 {"timestamp":"2025-11-10T12:05:22Z","event":"IP_CONFLICT","ip":"192.168.1.10","mac":"aa:bb:cc:00:04:04","vendor":"Dell Inc.","notes":"La MAC cambió de aa:bb:cc:00:02:02 a aa:bb:cc:00:04:04."}
+{"timestamp":"2025-11-10T14:30:15Z","event":"GATEWAY_SPOOF_DETECTED","ip":"192.168.1.1","mac":"de:ad:be:ef:00:11","vendor":"VMware, Inc.","notes":"Se detectó un anuncio ARP para el gateway desde una MAC no autorizada.","severity":"CRITICAL","legitimate_mac":"aa:bb:cc:00:01:01","attacker_mac":"de:ad:be:ef:00:11"}
 ```
 
 ### Lista Completa de Parámetros
@@ -235,6 +248,8 @@ $ sudo ./go-arpscan --localnet --monitor
 | | **--- Monitorización Continua ---** | | | |
 | | `--monitor` | `bool` | Activa el modo monitor para detectar cambios en la red en tiempo real. | `false` |
 | | `--monitor-interval` | `duration` | Intervalo para los sondeos activos en modo monitor (e.g., '10m', '1h'). | `5m` |
+| | `--detect-arp-spoofing` | `bool` | Activa la detección de suplantación ARP en modo monitor. | `false` |
+| | `--monitor-gateway` | `string` | IP del gateway a proteger con --detect-arp-spoofing. | `""` |
 | | `--webhook-url` | `string` | URL del webhook para enviar eventos del modo monitor. | `""` |
 | | `--webhook-header`| `stringSlice`| Cabecera HTTP para la petición webhook (e.g., 'Auth: Bearer...'). | `nil` |
 | | **--- Manipulación de Paquetes ---** | | | |
@@ -313,6 +328,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | Barra de Progreso | *(No disponible)* | `--progress` | 💡 **Nuevo**. Feedback visual inmediato en escaneos largos. |
 | Auditoría de Red | *(No disponible)* | `--state-file`, `--diff` | 💡 **Nuevo**. Permite guardar y comparar escaneos para detectar cambios en la red. |
 | Monitorización Continua | *(No disponible)* | `--monitor` | 💡 **Nuevo**. Opera como un sensor de red para la detección de cambios en tiempo real. |
+| Detección de Spoofing | *(No disponible)* | `--detect-arp-spoofing` | 💡 **Nuevo**. Activa la detección de suplantación ARP en el modo monitor. |
 | Webhooks de Alerta | *(No disponible)* | `--webhook-url` | 💡 **Nuevo**. Conecta el modo monitor con sistemas de alerta y SOARs. |
 | Listas de Exclusión | *(No disponible)* | `--exclude`, `--exclude-file` | 💡 **Nuevo**. Permite un escaneo quirúrgico, evitando sistemas críticos. |
 | **Manipulación de Paquetes** | | | |
@@ -412,7 +428,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 
 *   [✅] **Modo Monitor (`--monitor`)**: Opera como un sensor persistente para la detección de cambios en la red en tiempo real.
 *   [✅] **Integración Nativa con Webhooks (`--webhook-url`)**: Conecta con ecosistemas de SecOps (Slack, SOARs) enviando eventos a endpoints HTTP con cabeceras de autenticación.
-*   `[🔲]` **Detección Avanzada de Anomalías ARP (`--detect-arp-spoofing`)**: Amplía el modo monitor para clasificar cambios como potencialmente maliciosos (e.g., MAC flapping del gateway).
+*   [✅] **Detección Avanzada de Anomalías ARP (`--detect-arp-spoofing`)**: Amplía el modo monitor para clasificar cambios como potencialmente maliciosos (e.g., MAC flapping del gateway).
 *   `[🔲]` **Publicación de Eventos vía MQTT (`--publish-mqtt`)**: Permite la integración con brokers de mensajería para arquitecturas de sensores distribuidos a gran escala.
 
 ## Aviso Legal y de Responsabilidad
