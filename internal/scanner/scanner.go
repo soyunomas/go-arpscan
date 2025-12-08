@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket"
@@ -76,6 +77,19 @@ const (
 	numSenders = 50
 )
 
+// [Fase 2] Helper para convertir IP a array [4]byte sin allocs
+func ipToKey(ip net.IP) [4]byte {
+	var key [4]byte
+	// Si es IPv4, suele ser slice de 4 bytes o 16 bytes (mapped).
+	// Usamos copy que maneja ambos casos seguramente si tomamos los últimos 4.
+	if len(ip) == 4 {
+		copy(key[:], ip)
+	} else {
+		copy(key[:], ip[len(ip)-4:])
+	}
+	return key
+}
+
 func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	handle, err := pcap.OpenLive(cfg.Interface.Name, int32(cfg.Snaplen), true, pcap.BlockForever)
 	if err != nil {
@@ -116,23 +130,30 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 			}
 		}
 
-		targets := make(map[string]*Target)
+		// [Fase 2] Cambio de map[string] a map[[4]byte]
+		targets := make(map[[4]byte]*Target)
 		targetList := make([]*Target, len(cfg.IPs))
+		
 		for i, ip := range cfg.IPs {
 			t := &Target{
 				IP:     ip,
 				Status: StatusPending,
 			}
-			targets[ip.String()] = t
+			// Usamos la IP normalizada a 4 bytes como clave
+			targets[ipToKey(ip)] = t
 			targetList[i] = t
 		}
+
+		// [Fase 3] Contador atómico
+		var pendingTargets int64 = int64(len(cfg.IPs))
 
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.ScanTimeout)
 		defer cancel()
 
 		var wgListener sync.WaitGroup
 		wgListener.Add(1)
-		go listener(ctx, &wgListener, handle, cfg, targets, results, pcapWriter)
+		// Pasamos el mapa con el nuevo tipo de clave
+		go listener(ctx, &wgListener, handle, cfg, targets, results, pcapWriter, &pendingTargets)
 
 		var wgSenders sync.WaitGroup
 		ifaceIPNet, err := GetSrcIPNet(cfg.Interface)
@@ -184,8 +205,11 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 					break main_loop
 				}
 			}
+			
+			// [Fase 3] Lectura atómica
+			remaining := atomic.LoadInt64(&pendingTargets)
 			if cfg.Verbosity >= 1 {
-				log.Printf("Fin de la pasada %d. Hosts restantes: %d", pass+1, countRemainingTargets(targets))
+				log.Printf("Fin de la pasada %d. Hosts restantes: %d", pass+1, remaining)
 			}
 
 			currentHostTimeout := float64(cfg.HostTimeout)
@@ -194,7 +218,8 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 			}
 			time.Sleep(time.Duration(currentHostTimeout))
 
-			if countRemainingTargets(targets) == 0 {
+			// [Fase 3] Check atómico
+			if atomic.LoadInt64(&pendingTargets) <= 0 {
 				break main_loop
 			}
 		}
@@ -208,18 +233,6 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	}()
 
 	return results, nil
-}
-
-func countRemainingTargets(targets map[string]*Target) int {
-	count := 0
-	for _, t := range targets {
-		t.mu.Lock()
-		if t.Status != StatusReplied {
-			count++
-		}
-		t.mu.Unlock()
-	}
-	return count
 }
 
 func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, jobs <-chan net.IP, ifaceIPNet *net.IPNet) {
@@ -237,6 +250,10 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 	for i := 0; i < net.IPv4len; i++ {
 		hostPart[i] &^= ifaceIPNet.Mask[i]
 	}
+
+	// [Fase 1] Buffer Reuse
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 
 	for {
 		select {
@@ -281,7 +298,11 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 			if cfg.Verbosity >= 2 {
 				log.Printf("Enviando ARP a %s desde %s", dstIPv4, sourceIP)
 			}
-			sendARP(handle, cfg.Interface, cfg, sourceIP, dstIPv4)
+			
+			// [Fase 1] Pasamos buffer y opciones
+			sendARP(handle, cfg.Interface, cfg, sourceIP, dstIPv4, buf, opts)
+			// [Fase 1] Limpiamos buffer
+			buf.Clear()
 
 			if cfg.ProgressBar != nil {
 				cfg.ProgressBar.Add(1)
@@ -290,7 +311,8 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 	}
 }
 
-func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[string]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer) {
+// [Fase 2] Mapa actualizado a map[[4]byte]*Target
+func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[[4]byte]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer, pendingTargets *int64) {
 	defer wg.Done()
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	for {
@@ -323,42 +345,48 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 				continue
 			}
 
-			srcIPStr := net.IP(arp.SourceProtAddress).String()
+			// [Fase 2] Optimización CRÍTICA:
+			// Antes: srcIPStr := net.IP(...).String() -> Malloc en heap + copia
+			// Ahora: ipToKey(...) -> Stack allocation (cero basura)
+			
+			// Solo convertimos a String si realmente encontramos el target y necesitamos reportarlo.
+			targetKey := ipToKey(arp.SourceProtAddress)
+			
+			target, found := targets[targetKey]
+			if !found {
+				if cfg.Verbosity >= 1 {
+					// Solo aquí pagamos el precio de convertir a string
+					log.Printf("Recibida respuesta de un host desconocido: %s", net.IP(arp.SourceProtAddress))
+				}
+				continue
+			}
+			
+			// Ahora que sabemos que es un target válido, preparamos los datos para el resultado
+			// Esta conversión es inevitable para el reporte, pero hemos filtrado el ruido primero.
+			srcIPStr := target.IP.String() 
 			srcMACStr := net.HardwareAddr(arp.SourceHwAddress).String()
 
 			if cfg.Verbosity >= 2 {
 				log.Printf("Recibido paquete ARP de %s [%s]", srcIPStr, srcMACStr)
 			}
 
-			target, found := targets[srcIPStr]
-			if !found {
-				if cfg.Verbosity >= 1 {
-					log.Printf("Recibida respuesta de un host desconocido: %s", srcIPStr)
-				}
-				continue
-			}
-
-			// <<< INICIO DE LA LÓGICA CORREGIDA >>>
 			target.mu.Lock()
 			var rtt time.Duration
 			if !target.LastSent.IsZero() {
 				rtt = time.Since(target.LastSent)
 			}
 
-			// Marcamos el objetivo como respondido en la primera respuesta.
-			// Esto es importante para que el bucle principal de escaneo sepa
-			// que no necesita seguir enviando paquetes a este objetivo.
+			// [Fase 3] Lógica atómica
 			if target.Status != StatusReplied {
 				target.Status = StatusReplied
+				atomic.AddInt64(pendingTargets, -1)
+				
 				if cfg.Verbosity >= 2 {
 					log.Printf("Primera respuesta de %s. Marcado como respondido.", srcIPStr)
 				}
 			}
 			target.mu.Unlock()
 
-			// ¡LA CLAVE! Enviamos CADA resultado al canal de procesamiento,
-			// permitiendo que la capa superior se encargue de la lógica de
-			// conflictos y duplicados.
 			vendor := cfg.VendorDB.Lookup(srcMACStr)
 			results <- ScanResult{
 				IP:     srcIPStr,
@@ -366,12 +394,12 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 				RTT:    rtt,
 				Vendor: vendor,
 			}
-			// <<< FIN DE LA LÓGICA CORREGIDA >>>
 		}
 	}
 }
 
-func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstIP net.IP) {
+// [Fase 1] sendARP Optimizado
+func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstIP net.IP, buf gopacket.SerializeBuffer, opts gopacket.SerializeOptions) {
 	var sourceEthMAC net.HardwareAddr
 	if cfg.EthSrcMAC != nil {
 		sourceEthMAC = cfg.EthSrcMAC
@@ -417,22 +445,17 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 		DstProtAddress:    []byte(dstIP.To4()),
 	}
 
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true} // FixLengths a true es más seguro con LLC
-	var err error
-
-	var layersToSerialize []gopacket.SerializableLayer
+	// [Fase 1] Pre-alloc
+	layersToSerialize := make([]gopacket.SerializableLayer, 0, 5)
 
 	if cfg.UseLLC {
-		// Construir el paquete con framing IEEE 802.2 LLC/SNAP (RFC 1042)
 		llc := layers.LLC{
-			DSAP:    0xAA, // SNAP
-			SSAP:    0xAA, // SNAP
-			Control: 0x03, // Unnumbered Information
+			DSAP:    0xAA,
+			SSAP:    0xAA,
+			Control: 0x03,
 		}
-		// <-- CORRECCIÓN: El nombre del campo es OrganizationalCode, no OUI. -->
 		snap := layers.SNAP{
-			OrganizationalCode: []byte{0x00, 0x00, 0x00}, // Encapsulated Ethernet OUI
+			OrganizationalCode: []byte{0x00, 0x00, 0x00},
 			Type:               layers.EthernetType(cfg.EthernetPrototype),
 		}
 
@@ -440,15 +463,12 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 			eth.EthernetType = layers.EthernetTypeDot1Q
 			dot1q := layers.Dot1Q{
 				VLANIdentifier: cfg.VlanID,
-				// gopacket calculará el Type como la longitud del payload LLC/SNAP/ARP
 			}
 			layersToSerialize = append(layersToSerialize, &eth, &dot1q, &llc, &snap, &arp)
 		} else {
-			// gopacket calculará el EthernetType como la longitud del payload LLC/SNAP/ARP
 			layersToSerialize = append(layersToSerialize, &eth, &llc, &snap, &arp)
 		}
 	} else {
-		// Lógica original para framing Ethernet-II
 		if cfg.VlanID > 0 {
 			eth.EthernetType = layers.EthernetTypeDot1Q
 			dot1q := layers.Dot1Q{
@@ -466,7 +486,8 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 		layersToSerialize = append(layersToSerialize, gopacket.Payload(cfg.PaddingData))
 	}
 
-	err = gopacket.SerializeLayers(buf, opts, layersToSerialize...)
+	// [Fase 1] Serialize
+	err := gopacket.SerializeLayers(buf, opts, layersToSerialize...)
 
 	if err != nil {
 		log.Printf("Error serializando paquete para %s: %v", dstIP, err)
