@@ -2,7 +2,7 @@
 package runner
 
 import (
-	"fmt" // <<< IMPORT AÑADIDO
+	"fmt"
 	"go-arpscan/internal/formatter"
 	"go-arpscan/internal/scanner"
 	"log"
@@ -145,34 +145,53 @@ func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verb
 	var conflictSummaries []string
 
 	for result := range resultsChan {
+		// 1. Detección de Conflictos y Duplicados (Jerarquía estricta)
 		if previousMAC, found := seenIPs[result.IP]; found {
-			if ignoreDups {
-				if verboseCount >= 1 {
-					log.Printf("Respuesta duplicada/conflicto para %s (%s) ignorada.", result.IP, result.MAC)
-				}
-				continue
-			}
+			// Caso A: La IP ya ha sido vista.
 			if previousMAC != result.MAC {
+				// Conflicto de IP: Misma IP, diferente MAC.
 				result.Status = "(CONFLICT)"
 				summary := fmt.Sprintf("%s está en uso por %s y %s", result.IP, previousMAC, result.MAC)
 				conflictSummaries = append(conflictSummaries, summary)
 			} else {
+				// Duplicado Exacto: Misma IP, misma MAC.
+				if ignoreDups {
+					if verboseCount >= 1 {
+						log.Printf("Respuesta duplicada para %s (%s) ignorada.", result.IP, result.MAC)
+					}
+					continue // Saltamos el callback y el resto de lógica
+				}
 				result.Status = "(DUPLICATE)"
+				
+				// IMPORTANTE: Si es un duplicado exacto, NO seguimos comprobando Multi-IP.
+				// Simplemente imprimimos que es un duplicado y pasamos al siguiente.
+				resultCallback(result)
+				continue 
 			}
 		} else {
+			// Caso B: Primera vez que vemos esta IP.
 			seenIPs[result.IP] = result.MAC
 		}
 
+		// 2. Detección de Multi-IP (Una MAC tiene varias IPs)
+		// Solo llegamos aquí si NO es un duplicado exacto (o es la primera vez, o es un conflicto).
+		
 		ipsForMAC := seenMACs[result.MAC]
 		isNewIPForThisMAC := true
+		
+		// Verificamos si esta IP ya estaba registrada para esta MAC
 		for _, seenIP := range ipsForMAC {
 			if seenIP == result.IP {
 				isNewIPForThisMAC = false
 				break
 			}
 		}
+
 		if isNewIPForThisMAC {
 			seenMACs[result.MAC] = append(ipsForMAC, result.IP)
+			
+			// Si esta MAC ya tiene más de una IP asociada, y el status actual está limpio,
+			// marcamos como Multi-IP.
 			if len(seenMACs[result.MAC]) > 1 && result.Status == "" {
 				result.Status = "(Multi-IP)"
 			}
