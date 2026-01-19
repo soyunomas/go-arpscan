@@ -94,6 +94,17 @@ func (db *VendorDB) Lookup(mac string) string {
 		}
 	}
 
+	// 4. Chequeo de Locally Administered Address (LAA)
+	// Si el segundo bit menos significativo del primer byte es 1, es local.
+	if len(normMAC) >= 2 {
+		var firstByte byte
+		// Usamos Sscanf para parsear el hex del primer byte
+		fmt.Sscanf(normMAC[:2], "%02X", &firstByte)
+		if (firstByte & 0x02) != 0 {
+			return "Desconocido (Administrado Localmente)"
+		}
+	}
+
 	return "Desconocido"
 }
 

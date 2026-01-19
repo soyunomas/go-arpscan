@@ -202,16 +202,27 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	}
 
 	scanTimeout := cfg.ScanTimeout
-	if scanTimeout == 20*time.Second { // El valor por defecto no fue sobreescrito
+	// Detectar si el usuario no tocó el timeout (asumiendo 20s default).
+	// Optimizamos para que sea "snappy" como arp-scan.
+	if scanTimeout == 20*time.Second {
 		numHosts := len(ips)
-		baseSendTime := time.Duration(numHosts) * interval * time.Duration(cfg.Retry)
-		finalHostTimeout := float64(cfg.HostTimeout) * math.Pow(cfg.BackoffFactor, float64(cfg.Retry-1))
-		finalBuffer := time.Duration(finalHostTimeout) + 2*time.Second
-		calculatedTimeout := baseSendTime + finalBuffer
-		if calculatedTimeout < 5*time.Second {
-			calculatedTimeout = 5 * time.Second
+		// Tiempo total de transmisión
+		txTime := time.Duration(numHosts) * interval * time.Duration(cfg.Retry)
+
+		// Tiempo máximo de espera por la última respuesta (Backoff acumulado)
+		lastPacketWait := time.Duration(float64(cfg.HostTimeout) * math.Pow(cfg.BackoffFactor, float64(cfg.Retry-1)))
+
+		// Buffer de seguridad reducido (Cálculo más ajustado, Precepto #53)
+		safetyBuffer := 1 * time.Second
+
+		calculatedTimeout := txTime + lastPacketWait + safetyBuffer
+
+		// Mínimo 2 segundos para redes muy pequeñas, pero no forzar 5s si no es necesario.
+		if calculatedTimeout < 2*time.Second {
+			calculatedTimeout = 2 * time.Second
 		}
 		scanTimeout = calculatedTimeout
+
 		if cfg.VerboseCount > 0 && len(ips) > 0 {
 			log.Printf("Timeout de escaneo no especificado. Calculado automáticamente a: %v", scanTimeout)
 		}
