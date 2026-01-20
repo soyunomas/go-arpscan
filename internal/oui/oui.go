@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath" // <--- NUEVO IMPORT
 	"strings"
 	"time"
 )
@@ -225,7 +226,14 @@ func EnsureFile(path, url, fileType string) error {
 		return fmt.Errorf("error al verificar el archivo %s: %w", fileType, err)
 	}
 
-	log.Printf("Archivo %s no encontrado. Descargando desde %s...", fileType, url)
+	// --- INICIO DE MODIFICACIÓN: Crear directorio padre si no existe ---
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("fallo al crear el directorio para %s en %s: %w", fileType, dir, err)
+	}
+	// --- FIN DE MODIFICACIÓN ---
+
+	log.Printf("Archivo %s no encontrado. Descargando desde %s a %s...", fileType, url, path)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)

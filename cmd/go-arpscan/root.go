@@ -8,6 +8,7 @@ import (
 	"go-arpscan/internal/runner"
 	"log"
 	"os"
+	"path/filepath" // <--- NUEVO IMPORT
 	"time"
 
 	"github.com/fatih/color"
@@ -114,6 +115,24 @@ func init() {
 	rootCmd.PersistentFlags().SortFlags = false
 	rootCmd.Flags().SortFlags = false
 
+	// --- LÓGICA DE DETECCIÓN DE DIRECTORIO DE CONFIGURACIÓN ---
+	// Calculamos las rutas por defecto para OUI e IAB basadas en el SO.
+	configDir, err := os.UserConfigDir()
+	var defaultOUI, defaultIAB string
+
+	if err == nil {
+		// En Linux: ~/.config/go-arpscan/oui.txt
+		// En Windows: %AppData%\go-arpscan\oui.txt
+		// En Mac: ~/Library/Application Support/go-arpscan/oui.txt
+		defaultOUI = filepath.Join(configDir, "go-arpscan", "oui.txt")
+		defaultIAB = filepath.Join(configDir, "go-arpscan", "iab.txt")
+	} else {
+		// Fallback al directorio actual si falla la detección del sistema
+		defaultOUI = "oui.txt"
+		defaultIAB = "iab.txt"
+	}
+	// ---------------------------------------------------------
+
 	// --- Gestión de Configuración y Perfiles ---
 	rootCmd.PersistentFlags().String("config", "", "Ruta al fichero de configuración YAML (por defecto ~/.config/go-arpscan/config.yaml).")
 	rootCmd.PersistentFlags().String("profiles", "", "Ruta al fichero de perfiles YAML (busca en ./ y ~/.config/go-arpscan/).")
@@ -175,8 +194,9 @@ func init() {
 	rootCmd.Flags().StringSlice("webhook-header", nil, "Cabecera HTTP para la petición webhook (e.g., 'Auth: Bearer ...'). Se puede repetir.")
 
 	// --- Ficheros de Datos y Vendors ---
-	rootCmd.Flags().StringP("ouifile", "O", "oui.txt", "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca 'oui.txt' y se descarga si no existe.")
-	rootCmd.Flags().String("iabfile", "iab.txt", "Usa el fichero de mapeo IAB de IEEE a vendor a>.\nPor defecto, se busca 'iab.txt' y se descarga si no existe.")
+	// MODIFICACIÓN: Usamos las rutas por defecto calculadas al inicio de init()
+	rootCmd.Flags().StringP("ouifile", "O", defaultOUI, "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca en "+defaultOUI+" y se descarga si no existe.")
+	rootCmd.Flags().String("iabfile", defaultIAB, "Usa el fichero de mapeo IAB de IEEE a vendor a>.\nPor defecto, se busca en "+defaultIAB+" y se descarga si no existe.")
 	rootCmd.Flags().String("macfile", "", "Usa el fichero personalizado de mapeo MAC/prefijo a vendor s>.")
 
 	// --- Formato de Salida y UI ---
