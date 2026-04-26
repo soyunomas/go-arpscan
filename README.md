@@ -30,6 +30,29 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 *   🎯 **Flexibilidad en los Objetivos**: Soporta IPs individuales, rangos (`192.168.1.1-192.168.1.254`) y notación CIDR (`192.168.1.0/24`).
 *   ⚙️ **Control Total del Escaneo**: Parámetros configurables para timeouts, reintentos, ancho de banda, aleatorización y más.
 
+## Rendimiento (Benchmarks)
+
+Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de rendimiento comparando `go-arpscan` contra el `arp-scan` original (escrito en C, versión 1.9.7). La prueba consistió en 10 rondas de escaneo sobre una red `/24` estándar (254 hosts).
+
+### ⚡ Velocidad y Estabilidad
+
+| Herramienta | Tiempo Promedio | Tiempo Mínimo | Tiempo Máximo |
+| :--- | :--- | :--- | :--- |
+| **`go-arpscan`** 🏆 | **1.37 segundos** (~1377 ms) | 1.36s | 1.39s |
+| **`arp-scan`** | **1.95 segundos** (~1955 ms) | 1.94s | 1.98s |
+
+*Resultado: `go-arpscan` es aproximadamente un **30% más rápido** en cada escaneo. Además, su ejecución es extremadamente estable, con una variación de apenas ~35ms entre su ejecución más rápida y la más lenta.*
+
+### 🔍 Precisión y Detección de Fabricantes (OUI)
+
+Mientras que ambas herramientas descubren exactamente los mismos hosts a nivel de red, `go-arpscan` ofrece un reconocimiento de hardware muy superior. Al automatizar la descarga y actualización de las bases de datos OUI e IAB de la IEEE, detecta dispositivos modernos que las herramientas clásicas no reconocen:
+
+| Dirección MAC | Detección en `arp-scan` | Detección en `go-arpscan` |
+| :--- | :--- | :--- |
+| `e0:1c:fc:...` | *(Unknown)* | **D-Link International** |
+| `9c:9d:7e:...` | *(Unknown)* | **Beijing Xiaomi Mobile Software Co., Ltd** |
+| `50:8e:49:...` | *(Unknown)* | **Xiaomi Communications Co Ltd** |
+
 ## Instalación
 
 ### Opción 1: Binarios Pre-compilados (Recomendado)
