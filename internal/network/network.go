@@ -10,11 +10,32 @@ import (
 )
 
 // ResolveTargets toma una lista de strings y los convierte en una lista única de IPs.
-// Soporta: IPs individuales, rangos de IP (1.1.1.1-1.1.1.10), CIDRs y hostnames (a menos que numeric sea true).
+// Soporta: IPs individuales, rangos de IP (1.1.1.1-1.1.1.10), CIDRs,
+// formato red:máscara (192.168.1.0:255.255.255.0, compatible con arp-scan)
+// y hostnames (a menos que numeric sea true).
 func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 	ipMap := make(map[string]struct{})
 
 	for _, target := range targets {
+		// Intento 0: ¿Es notación red:máscara estilo arp-scan? (e.g., 192.168.1.0:255.255.255.0)
+		if idx := strings.Index(target, ":"); idx > 0 && strings.Count(target, ":") == 1 {
+			netStr, maskStr := target[:idx], target[idx+1:]
+			netIP := net.ParseIP(netStr)
+			maskIP := net.ParseIP(maskStr)
+			if netIP != nil && maskIP != nil && netIP.To4() != nil && maskIP.To4() != nil {
+				mask := net.IPv4Mask(maskIP.To4()[0], maskIP.To4()[1], maskIP.To4()[2], maskIP.To4()[3])
+				ipNet := &net.IPNet{IP: netIP.Mask(mask), Mask: mask}
+				ips, err := GetIPs(ipNet)
+				if err != nil {
+					return nil, fmt.Errorf("error generando IPs para %s: %w", target, err)
+				}
+				for _, ip := range ips {
+					ipMap[ip.String()] = struct{}{}
+				}
+				continue
+			}
+		}
+
 		// Intento 1: ¿Es un rango de IP? (e.g., 192.168.1.10-192.168.1.20)
 		if strings.Contains(target, "-") {
 			parts := strings.Split(target, "-")

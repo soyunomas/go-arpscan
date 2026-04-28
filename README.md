@@ -87,13 +87,13 @@ sudo mv go-arpscan /usr/local/bin/
 sudo ./go-arpscan --localnet --progress
 
 # Escanear una subred completa usando notación CIDR y especificando la interfaz
-sudo ./go-arpscan -i eno1 192.168.24.0/24
+sudo ./go-arpscan -I eno1 192.168.24.0/24
 
 # Escanear una subred excluyendo el servidor de backups
 sudo ./go-arpscan 192.168.24.0/24 --exclude 192.168.24.10
 
 # Escanear un rango, mostrar RTT y guardar las respuestas para análisis en Wireshark
-sudo ./go-arpscan -i eno1 -D -W scan_results.pcap 192.168.24.1-192.168.24.100
+sudo ./go-arpscan -I eno1 -D -W scan_results.pcap 192.168.24.1-192.168.24.100
 
 # Usar un perfil táctico para un escaneo sigiloso, evadiendo la detección
 sudo ./go-arpscan --profile stealth-scan-generic --localnet
@@ -143,11 +143,11 @@ sudo ./go-arpscan --localnet --monitor | jq -r \
 ```bash
 # Ataque estándar: Interceptar el tráfico entre el host 192.168.1.100 y el gateway 192.168.1.1
 # La herramienta gestiona el reenvío de paquetes para que la víctima no pierda la conexión.
-sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1
+sudo ./go-arpscan -I eno1 --spoof 192.168.1.100 --gateway 192.168.1.1
 
 # Ataque sigiloso: Interceptar el tráfico con menos frecuencia para evitar la detección
 # Los paquetes de envenenamiento se envían cada 30 segundos en lugar de cada 2.
-sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1 --spoof-interval 30s
+sudo ./go-arpscan -I eno1 --spoof 192.168.1.100 --gateway 192.168.1.1 --spoof-interval 30s
 ```
 *En otra terminal, puedes usar `wireshark` o `tcpdump` para ver el tráfico interceptado en la interfaz `eno1`.*
 
@@ -203,7 +203,7 @@ Puedes usar los ficheros `config.complete.yaml` y `profiles.yaml` del repositori
 ### Ejemplo de Salida
 ```
 # Salida de un escaneo normal con varios escenarios de diagnóstico
-$ sudo ./go-arpscan -i eno1 192.168.24.0/24
+$ sudo ./go-arpscan -I eno1 192.168.24.0/24
 2025/11/08 01:15:10 Iniciando escaneo en la interfaz eno1 (aa:bb:cc:00:11:22)
 2025/11/08 01:15:10 Objetivos a escanear: 254 IPs
 2025/11/08 01:15:10 Usando IP de origen dinámica para cada paquete (comportamiento por defecto).
@@ -218,7 +218,7 @@ IP Address         MAC Address          Status          Vendor
 192.168.24.100     aa:bb:cc:dd:ee:c3    (DUPLICATE)     HP Inc.
 
 # Salida del modo --diff
-$ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
+$ sudo ./go-arpscan -I eno1 --diff --state-file network_baseline.json
 2025/11/09 10:30:00 Modo DIFF: Comparando el escaneo actual con el estado de 'network_baseline.json'
 ...
 [+] AÑADIDO:     192.168.24.112  aa:bb:cc:11:22:33  (Apple, Inc.)

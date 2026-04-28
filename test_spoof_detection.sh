@@ -109,7 +109,7 @@ echo -e "${YELLOW}    Verás el escaneo inicial. Espera el mensaje 'Protección 
     --monitor \
     --detect-arp-spoofing \
     --monitor-gateway "$GATEWAY_IP" \
-    -i "$INTERFACE" | jq -r --unbuffered '
+    -I "$INTERFACE" | jq -r --unbuffered '
     if .event == "GATEWAY_SPOOF_DETECTED" then
         "\(.timestamp) | \u001b[31;1m¡¡¡ALERTA!!! \(.event)\u001b[0m | Gateway: \(.ip) | Atacante: \(.attacker_mac) (\(.vendor)) | MAC Legítima: \(.legitimate_mac)"
     elif .event == "NEW_HOST" then

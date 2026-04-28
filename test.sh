@@ -46,8 +46,8 @@ run_test_case() {
     echo -e "${GREEN}▶ GO-ARPSCAN...${NC}"
     
     start_go=$(date +%s%N)
-    # Pasamos explícitamente la interfaz con -i
-    OUTPUT_GO=$(sudo $GO_BIN -i $IFACE --localnet --interval $GO_INT --retry $RETRY --host-timeout $TIMEOUT_GO --plain)
+    # Pasamos explícitamente la interfaz con -I
+    OUTPUT_GO=$(sudo $GO_BIN -I $IFACE --localnet --interval $GO_INT --retry $RETRY --host-timeout $TIMEOUT_GO --plain)
     end_go=$(date +%s%N)
     
     COUNT_GO=$(echo "$OUTPUT_GO" | wc -l)
