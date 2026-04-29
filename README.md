@@ -87,13 +87,13 @@ sudo mv go-arpscan /usr/local/bin/
 sudo ./go-arpscan --localnet --progress
 
 # Escanear una subred completa usando notación CIDR y especificando la interfaz
-sudo ./go-arpscan -i eno1 192.168.24.0/24
+sudo ./go-arpscan -I eno1 192.168.24.0/24
 
 # Escanear una subred excluyendo el servidor de backups
 sudo ./go-arpscan 192.168.24.0/24 --exclude 192.168.24.10
 
 # Escanear un rango, mostrar RTT y guardar las respuestas para análisis en Wireshark
-sudo ./go-arpscan -i eno1 -D -W scan_results.pcap 192.168.24.1-192.168.24.100
+sudo ./go-arpscan -I eno1 -D -W scan_results.pcap 192.168.24.1-192.168.24.100
 
 # Usar un perfil táctico para un escaneo sigiloso, evadiendo la detección
 sudo ./go-arpscan --profile stealth-scan-generic --localnet
@@ -143,11 +143,11 @@ sudo ./go-arpscan --localnet --monitor | jq -r \
 ```bash
 # Ataque estándar: Interceptar el tráfico entre el host 192.168.1.100 y el gateway 192.168.1.1
 # La herramienta gestiona el reenvío de paquetes para que la víctima no pierda la conexión.
-sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1
+sudo ./go-arpscan -I eno1 --spoof 192.168.1.100 --gateway 192.168.1.1
 
 # Ataque sigiloso: Interceptar el tráfico con menos frecuencia para evitar la detección
 # Los paquetes de envenenamiento se envían cada 30 segundos en lugar de cada 2.
-sudo ./go-arpscan -i eno1 --spoof 192.168.1.100 --gateway 192.168.1.1 --spoof-interval 30s
+sudo ./go-arpscan -I eno1 --spoof 192.168.1.100 --gateway 192.168.1.1 --spoof-interval 30s
 ```
 *En otra terminal, puedes usar `wireshark` o `tcpdump` para ver el tráfico interceptado en la interfaz `eno1`.*
 
@@ -203,7 +203,7 @@ Puedes usar los ficheros `config.complete.yaml` y `profiles.yaml` del repositori
 ### Ejemplo de Salida
 ```
 # Salida de un escaneo normal con varios escenarios de diagnóstico
-$ sudo ./go-arpscan -i eno1 192.168.24.0/24
+$ sudo ./go-arpscan -I eno1 192.168.24.0/24
 2025/11/08 01:15:10 Iniciando escaneo en la interfaz eno1 (aa:bb:cc:00:11:22)
 2025/11/08 01:15:10 Objetivos a escanear: 254 IPs
 2025/11/08 01:15:10 Usando IP de origen dinámica para cada paquete (comportamiento por defecto).
@@ -218,7 +218,7 @@ IP Address         MAC Address          Status          Vendor
 192.168.24.100     aa:bb:cc:dd:ee:c3    (DUPLICATE)     HP Inc.
 
 # Salida del modo --diff
-$ sudo ./go-arpscan -i eno1 --diff --state-file network_baseline.json
+$ sudo ./go-arpscan -I eno1 --diff --state-file network_baseline.json
 2025/11/09 10:30:00 Modo DIFF: Comparando el escaneo actual con el estado de 'network_baseline.json'
 ...
 [+] AÑADIDO:     192.168.24.112  aa:bb:cc:11:22:33  (Apple, Inc.)
@@ -248,16 +248,16 @@ $ sudo ./go-arpscan --localnet --monitor
 | | `--config` | `string` | Ruta al fichero de configuración YAML (`config.yaml`). | `~/.config/...` |
 | | `--profiles` | `string` | Ruta al fichero de perfiles YAML (`profiles.yaml`). | Búsqueda automática |
 | | `--profile` | `string` | Activa un perfil táctico desde el fichero de perfiles. | `""` |
-| `-i` | `--interface` | `string` | Interfaz de red a utilizar. | Auto-detectada |
+| `-I` | `--interface` | `string` | Interfaz de red a utilizar. Si no se especifica, se auto-detecta. | Auto-detectada |
 | | `--scan-timeout`| `duration` | Timeout global para todo el escaneo. | Calculado |
-| | `--localnet` | `bool` | Escanear la red local de la interfaz. | `false` |
+| `-l` | `--localnet` | `bool` | Escanear la red local de la interfaz. | `false` |
 | `-f` | `--file` | `string` | Leer objetivos desde un fichero (usar `-` para stdin). | `""` |
 | | `--exclude` | `stringSlice` | Excluye IPs o rangos CIDR del escaneo. | `nil` |
 | | `--exclude-file` | `string` | Excluye los objetivos listados en un fichero. | `""` |
 | `-N` | `--numeric` | `bool` | No realizar resolución de nombres de host (DNS). | `false` |
 | `-t` | `--host-timeout` | `duration` | Timeout inicial para el primer paquete enviado a un host. | `500ms` |
 | `-r` | `--retry` | `int` | Número total de intentos por host (1 = un paquete, sin reintentos). | `2` |
-| | `--interval` | `duration` | Intervalo mínimo entre el envío de paquetes. | `1ms` |
+| `-i` | `--interval` | `duration` | Intervalo mínimo entre el envío de paquetes. | `1ms` |
 | `-B` | `--bandwidth` | `string` | Ancho de banda de salida deseado (e.g., `1M`, `256k`). | `""` |
 | `-b` | `--backoff` | `float` | Factor por el que se multiplica el timeout en cada reintento. | `1.5` |
 | | **--- Explotación Activa ---** | | | |
@@ -312,23 +312,21 @@ $ sudo ./go-arpscan --localnet --monitor
 | `-v` | `--verbose` | `count` | Aumenta la verbosidad (-v, -vv, -vvv). | `0` |
 | `-V` | `--version` | `bool` | Muestra la versión del programa y sale. | `false` |
 
----
 
-## Comparación con arp-scan
 
-`go-arpscan` está fuertemente inspirado en la funcionalidad del clásico `arp-scan`, pero busca modernizar la experiencia del usuario y añadir características para la integración en flujos de trabajo actuales. La siguiente tabla muestra la correspondencia de los parámetros entre ambas herramientas.
+### Comparación con arp-scan
 
 | Funcionalidad | `arp-scan` (original) | `go-arpscan` (nuestro) | Estado / Comentarios |
 | :--- | :--- | :--- | :--- |
 | **Gestión de Objetivos** | | | |
-| Escanear Red Local | `--localnet`, `-l` | `--localnet` | ✅ **Implementado**. En `go-arpscan` se puede combinar con otros objetivos. |
+| Escanear Red Local | `--localnet`, `-l` | `--localnet`, `-l` | ✅ **Implementado**. En `go-arpscan` se puede combinar con otros objetivos. |
 | Leer Objetivos de Fichero | `--file=<s>`, `-f <s>` | `--file=<s>`, `-f <s>` | ✅ **Implementado**. |
 | No usar DNS | `--numeric`, `-N` | `--numeric`, `-N` | ✅ **Implementado**. |
 | **Control del Escaneo** | | | |
-| Especificar Interfaz | `--interface=<s>`, `-I <s>` | `--interface=<s>`, `-i <s>` | ✅ **Implementado**. ¡Ojo! El flag corto es diferente. Al igual que `arp-scan`, `go-arpscan` también auto-detecta la mejor interfaz si no se especifica. |
+| Especificar Interfaz | `--interface=<s>`, `-I <s>` | `--interface=<s>`, `-I <s>` | ✅ **Implementado**. Al igual que `arp-scan`, `go-arpscan` auto-detecta la mejor interfaz si no se especifica. |
 | Timeouts por Host | `--timeout=<i>`, `-t <i>` | `--host-timeout=<d>`, `-t <d>` | ✅ **Implementado**. `go-arpscan` acepta unidades de tiempo (e.g., `750ms`). |
 | Nº de Reintentos | `--retry=<i>`, `-r <i>` | `--retry=<i>`, `-r <i>` | ✅ **Implementado**. |
-| Intervalo entre Paquetes | `--interval=<x>`, `-i <x>` | `--interval=<d>` | ✅ **Implementado**. ¡Ojo! En `arp-scan`, `-i` es alias de `--interval`. En `go-arpscan`, `-i` es alias de `--interface`. |
+| Intervalo entre Paquetes | `--interval=<x>`, `-i <x>` | `--interval=<d>`, `-i <d>` | ✅ **Implementado**. |
 | Limitar Ancho de Banda | `--bandwidth=<x>`, `-B <x>` | `--bandwidth=<x>`, `-B <x>` | ✅ **Implementado**. |
 | Factor de Backoff | `--backoff=<f>`, `-b <f>` | `--backoff=<f>`, `-b <f>` | ✅ **Implementado**. |
 | Aleatorizar Objetivos | `--random`, `-R` | `--random`, `-R` | ✅ **Implementado**. |
@@ -372,7 +370,6 @@ $ sudo ./go-arpscan --localnet --monitor
 | Longitud HW/Proto ARP | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | ✅ **Implementado**. |
 | Relleno (Padding) | `--padding=<h>`, `-A <h>` | `--padding=<h>`, `-A <h>` | ✅ **Implementado**. |
 | Framing LLC | `--llc`, `-L` | `--llc`, `-L` | ✅ **Implementado**. |
-
 ## Hoja de Ruta
 
 A continuación se detalla el estado actual y las funcionalidades futuras planificadas para `go-arpscan`.

@@ -13,7 +13,56 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
+
+// arpScanFlagAliases mapea nombres de flags largos del arp-scan original
+// a los nombres canónicos usados en go-arpscan, para que un usuario
+// de arp-scan pueda invocar el binario con su sintaxis habitual.
+var arpScanFlagAliases = map[string]string{
+	"timeout": "host-timeout",
+}
+
+// systemVendorCacheDir es la ubicación canónica para los ficheros OUI/IAB.
+// Vive bajo /var/lib porque es persistente, escribible por root (el binario
+// corre siempre como root) y compartida entre invocaciones con o sin
+// `sudo -E` — el path no depende de $HOME, así que no se redescarga al
+// alternar entre user y root.
+const systemVendorCacheDir = "/var/lib/go-arpscan"
+
+// resolveVendorPath devuelve la ruta del fichero OUI/IAB a usar. Recorre
+// una jerarquía de candidatos y devuelve el primer existente; si ninguno
+// existe, devuelve la ruta canónica donde EnsureFile descargará el fichero.
+//
+// Orden de búsqueda:
+//  1. /var/lib/go-arpscan/<file>     ← cache propia, compartida sudo/no-sudo
+//  2. ~/.config/go-arpscan/<file>    ← fallback usuario (sin root)
+func resolveVendorPath(name string) string {
+	canonical := filepath.Join(systemVendorCacheDir, name)
+
+	candidates := []string{canonical}
+	if cfgDir, err := os.UserConfigDir(); err == nil {
+		candidates = append(candidates, filepath.Join(cfgDir, "go-arpscan", name))
+	}
+
+	for _, p := range candidates {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	// Ningún candidato existe: devolvemos la ruta canónica para que
+	// EnsureFile cree el directorio y descargue ahí.
+	return canonical
+}
+
+// normalizeFlagAliases permite aceptar nombres de flags alternativos
+// (alias del arp-scan original) sin duplicar la definición.
+func normalizeFlagAliases(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+	if alias, ok := arpScanFlagAliases[name]; ok {
+		return pflag.NormalizedName(alias)
+	}
+	return pflag.NormalizedName(name)
+}
 
 var (
 	version = "dev"
@@ -42,12 +91,12 @@ La prioridad es: Flags > Perfil > Configuración > Defaults.
 
 Es necesario ejecutar go-arpscan como root.`,
 	Example: `  sudo ./go-arpscan --localnet --progress
-  sudo ./go-arpscan -i eth0 192.168.1.0/24
-  sudo ./go-arpscan -i eth0 192.168.1.1-192.168.1.254
+  sudo ./go-arpscan -I eth0 192.168.1.0/24
+  sudo ./go-arpscan -I eth0 192.168.1.1-192.168.1.254
   sudo ./go-arpscan --file=hostlist.txt --json
   sudo ./go-arpscan --config=mi_perfil.yaml --localnet
   sudo ./go-arpscan --profile=stealth-scan-generic --localnet
-  sudo ./go-arpscan -i eth0 --spoof 192.168.1.10 --gateway 192.168.1.1
+  sudo ./go-arpscan -I eth0 --spoof 192.168.1.10 --gateway 192.168.1.1
   sudo ./go-arpscan --localnet --monitor --monitor-interval 5m
   sudo ./go-arpscan --detect-promisc 192.168.1.50
   sudo ./go-arpscan --localnet --monitor --detect-arp-spoofing --monitor-gateway 192.168.1.1`,
@@ -115,22 +164,23 @@ func init() {
 	rootCmd.PersistentFlags().SortFlags = false
 	rootCmd.Flags().SortFlags = false
 
-	// --- LÓGICA DE DETECCIÓN DE DIRECTORIO DE CONFIGURACIÓN ---
-	// Calculamos las rutas por defecto para OUI e IAB basadas en el SO.
-	configDir, err := os.UserConfigDir()
-	var defaultOUI, defaultIAB string
+	// Aceptamos alias de los flags largos del arp-scan original (e.g. --timeout -> --host-timeout)
+	// para que un usuario veterano pueda usar la misma sintaxis sin sobresaltos.
+	rootCmd.PersistentFlags().SetNormalizeFunc(normalizeFlagAliases)
+	rootCmd.Flags().SetNormalizeFunc(normalizeFlagAliases)
 
-	if err == nil {
-		// En Linux: ~/.config/go-arpscan/oui.txt
-		// En Windows: %AppData%\go-arpscan\oui.txt
-		// En Mac: ~/Library/Application Support/go-arpscan/oui.txt
-		defaultOUI = filepath.Join(configDir, "go-arpscan", "oui.txt")
-		defaultIAB = filepath.Join(configDir, "go-arpscan", "iab.txt")
-	} else {
-		// Fallback al directorio actual si falla la detección del sistema
-		defaultOUI = "oui.txt"
-		defaultIAB = "iab.txt"
-	}
+	// --- LÓGICA DE DETECCIÓN DE DIRECTORIO DE CONFIGURACIÓN ---
+	// El fichero OUI/IAB se resuelve buscando en una jerarquía de candidatos
+	// (primer hit gana). Esto evita re-descargas cuando el binario se ejecuta
+	// con/sin sudo (que cambia $HOME entre /home/<user> y /root).
+	//
+	// Orden de búsqueda:
+	//   1. /var/lib/go-arpscan/<file>     ← cache propia (escribible como root, compartida)
+	//   2. ~/.config/go-arpscan/<file>    ← fallback usuario
+	//
+	// Si nada existe, el default apunta a (1) y EnsureFile lo descargará allí.
+	defaultOUI := resolveVendorPath("oui.txt")
+	defaultIAB := resolveVendorPath("iab.txt")
 	// ---------------------------------------------------------
 
 	// --- Gestión de Configuración y Perfiles ---
@@ -139,9 +189,9 @@ func init() {
 	rootCmd.PersistentFlags().String("profile", "", "Activa un perfil táctico desde el fichero de perfiles (e.g., 'stealth-scan-generic').")
 
 	// --- Selección de Interfaz y Objetivos ---
-	rootCmd.PersistentFlags().StringP("interface", "i", "", "Usa la interfaz de red <s>. Si no se especifica, se auto-detecta.")
+	rootCmd.PersistentFlags().StringP("interface", "I", "", "Usa la interfaz de red <s>. Si no se especifica, se auto-detecta.")
 	rootCmd.PersistentFlags().Duration("scan-timeout", 20*time.Second, "Establece un timeout global de <d> para el escaneo completo.\n(calculado automáticamente si no se especifica)")
-	rootCmd.Flags().Bool("localnet", false, "Escanea la red local de la interfaz especificada.")
+	rootCmd.Flags().BoolP("localnet", "l", false, "Escanea la red local de la interfaz especificada.")
 	rootCmd.Flags().StringP("file", "f", "", "Lee los nombres de host o direcciones desde el archivo especificado s>.\nUn nombre o dirección IP por línea. Usa \"-\" para la entrada estándar.")
 	rootCmd.Flags().StringSlice("exclude", nil, "Excluye IPs o rangos CIDR del escaneo (e.g., --exclude 1.1.1.1,1.1.2.0/24).")
 	rootCmd.Flags().String("exclude-file", "", "Excluye los objetivos listados en el fichero especificado <s>.")
@@ -150,7 +200,7 @@ func init() {
 	// --- Control del Escaneo ---
 	rootCmd.Flags().DurationP("host-timeout", "t", 500*time.Millisecond, "Establece el timeout inicial por host a <d> (e.g., 500ms, 1s).\nEste timeout es para el primer paquete enviado a cada host. Los timeouts\nsubsiguientes se multiplican por el factor de backoff.")
 	rootCmd.Flags().IntP("retry", "r", 2, "Establece el número total de intentos por host a <i> .\nUn valor de 1 significa que solo se envía un paquete (sin reintentos).")
-	rootCmd.Flags().Duration("interval", 1*time.Millisecond, "Establece el intervalo mínimo entre el envío de paquetes a <d>.\nEsto controla el ancho de banda de salida. Para un control más intuitivo,\nconsidere usar --bandwidth.")
+	rootCmd.Flags().DurationP("interval", "i", 1*time.Millisecond, "Establece el intervalo mínimo entre el envío de paquetes a <d>.\nEsto controla el ancho de banda de salida. Para un control más intuitivo,\nconsidere usar --bandwidth.")
 	rootCmd.Flags().StringP("bandwidth", "B", "", "Establece el ancho de banda de salida deseado a <x> (e.g., 1M, 256k).\nEl valor es en bits/segundo. Soporta sufijos K, M, G (decimales).\nNo se puede usar junto con --interval.")
 	rootCmd.Flags().Float64P("backoff", "b", 1.5, "Establece el factor de backoff del timeout a <f>.\nEl timeout por host se multiplica por este factor después de cada reintento.")
 	rootCmd.Flags().BoolP("random", "R", false, "Aleatoriza el orden de los hosts en la lista de objetivos.\nEsto hace que los paquetes ARP se envíen en un orden aleatorio.")
