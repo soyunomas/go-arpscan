@@ -45,8 +45,8 @@ var (
 	vendorColor = color.New(color.FgHiCyan).SprintFunc()
 	rttColor    = color.New(color.FgHiMagenta).SprintFunc()
 	statusColor = color.New(color.FgHiWhite, color.Bold).SprintFunc()
-	warnColor = color.New(color.FgHiRed).SprintFunc()
-	infoColor = color.New(color.FgHiBlue).SprintFunc()
+	warnColor   = color.New(color.FgHiRed).SprintFunc()
+	infoColor   = color.New(color.FgHiBlue).SprintFunc()
 	headerColor = color.New(color.FgHiWhite, color.Bold).SprintFunc()
 )
 
@@ -109,7 +109,9 @@ func (f *DefaultFormatter) printRow(ip, mac, rtt, status, vendor string, useColo
 }
 
 func max(a, b int) int {
-	if a > b { return a }
+	if a > b {
+		return a
+	}
 	return b
 }
 
@@ -130,14 +132,14 @@ func (f *DefaultFormatter) PrintResult(result scanner.ScanResult) {
 func (f *DefaultFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {
 	if len(conflictSummaries) > 0 {
 		fmt.Println()
-		log.Printf(warnColor("ADVERTENCIA: Se detectaron %d conflictos de IP."), len(conflictSummaries))
+		log.Printf(warnColor("WARNING: Detected %d IP conflicts."), len(conflictSummaries))
 		for i, summary := range conflictSummaries {
 			log.Printf("[%d] %s", i+1, warnColor(summary))
 		}
 	}
 	if len(multiIPSummaries) > 0 {
 		fmt.Println()
-		log.Printf(infoColor("INFO: Se detectaron %d dispositivos Multi-IP."), len(multiIPSummaries))
+		log.Printf(infoColor("INFO: Detected %d Multi-IP devices."), len(multiIPSummaries))
 		for i, summary := range multiIPSummaries {
 			log.Printf("[%d] %s", i+1, infoColor(summary))
 		}
@@ -146,6 +148,7 @@ func (f *DefaultFormatter) PrintFooter(conflictSummaries []string, multiIPSummar
 
 // --- Quiet Formatter ---
 type QuietFormatter struct{}
+
 func NewQuietFormatter() *QuietFormatter { return &QuietFormatter{} }
 func (f *QuietFormatter) PrintHeader()   {}
 func (f *QuietFormatter) PrintResult(result scanner.ScanResult) {
@@ -154,7 +157,8 @@ func (f *QuietFormatter) PrintResult(result scanner.ScanResult) {
 func (f *QuietFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {}
 
 // --- Plain Formatter ---
-type PlainFormatter struct { *DefaultFormatter }
+type PlainFormatter struct{ *DefaultFormatter }
+
 func NewPlainFormatter(showRTT bool) *PlainFormatter {
 	return &PlainFormatter{DefaultFormatter: NewDefaultFormatter(showRTT)}
 }
@@ -165,7 +169,8 @@ func (f *PlainFormatter) PrintResult(result scanner.ScanResult) {
 func (f *PlainFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries []string) {}
 
 // --- CSV Formatter ---
-type CSVFormatter struct { writer *csv.Writer }
+type CSVFormatter struct{ writer *csv.Writer }
+
 func NewCSVFormatter() *CSVFormatter { return &CSVFormatter{writer: csv.NewWriter(os.Stdout)} }
 func (f *CSVFormatter) PrintHeader() {
 	_ = f.writer.Write([]string{"ip", "mac", "rtt_ms", "vendor", "status"})
@@ -217,6 +222,6 @@ func (f *JSONFormatter) PrintFooter(conflictSummaries []string, multiIPSummaries
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(output); err != nil {
-		log.Fatalf("Error fatal al generar la salida JSON: %v", err)
+		log.Fatalf("Fatal error generating JSON output: %v", err)
 	}
 }

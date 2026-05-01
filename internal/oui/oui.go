@@ -18,6 +18,10 @@ type VendorDB struct {
 	customVendors map[string]string
 	iabVendors    map[string]string
 	ouiVendors    map[string]string
+	// ouiBin es la copia binaria pre-ordenada del fichero OUI. Si está
+	// presente se prefiere para el lookup *[Regla 67]*: búsqueda binaria
+	// sobre datos planos cache-friendly, cero asignaciones por llamada.
+	ouiBin *binDB
 }
 
 // NewVendorDB crea e inicializa una nueva base de datos de vendedores a partir de los ficheros.
@@ -33,18 +37,49 @@ func NewVendorDB(ouiPath, iabPath, macPath string, verbosity int) (*VendorDB, er
 	if macPath != "" {
 		db.customVendors, err = loadCustomMACMap(macPath, verbosity)
 		if err != nil {
-			log.Printf("Advertencia: no se pudo cargar el archivo MAC personalizado %s: %v", macPath, err)
+			log.Printf("Warning: could not load custom MAC file %s: %v", macPath, err)
 		}
 	}
 
 	db.iabVendors, err = loadIABMap(iabPath, verbosity)
 	if err != nil {
-		log.Printf("Advertencia: no se pudo cargar el archivo IAB %s: %v", iabPath, err)
+		log.Printf("Warning: could not load IAB file %s: %v", iabPath, err)
 	}
 
 	db.ouiVendors, err = loadOUIMap(ouiPath, verbosity)
 	if err != nil {
-		log.Printf("Advertencia: no se pudo cargar el archivo OUI %s: %v", ouiPath, err)
+		log.Printf("Warning: could not load OUI file %s: %v", ouiPath, err)
+	}
+
+	// Pre-ordenar OUI en formato binario para búsqueda binaria sin allocs
+	// *[Reglas 30, 67]*. El .bin se genera lazy si no existe (cold-path).
+	if ouiPath != "" && len(db.ouiVendors) > 0 {
+		binPath := ouiPath + ".bin"
+		bdb, berr := loadBinDB(binPath)
+		if berr != nil {
+			if verbosity >= 1 {
+				log.Printf("Invalid OUI bin (%v); regenerating", berr)
+			}
+			bdb = nil
+		}
+		if bdb == nil {
+			if verbosity >= 1 {
+				log.Printf("Generating pre-sorted binary OUI index at %s...", binPath)
+			}
+			if werr := BuildBinFile(binPath, db.ouiVendors); werr != nil {
+				if verbosity >= 1 {
+					log.Printf("Warning: could not write %s: %v", binPath, werr)
+				}
+			} else {
+				bdb, _ = loadBinDB(binPath)
+			}
+		}
+		if bdb != nil {
+			db.ouiBin = bdb
+			if verbosity >= 2 {
+				log.Printf("Binary OUI index loaded: %d entries (binary search active)", bdb.count)
+			}
+		}
 	}
 
 	return db, nil
@@ -55,11 +90,37 @@ func normalizeMAC(mac string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.ReplaceAll(mac, ":", ""), "-", ""))
 }
 
+// hex2 convierte dos caracteres hex (en mayúsculas o minúsculas) a un byte.
+// Sin asignaciones, branchless-ish *[Regla 62]*.
+//
+//go:nosplit
+func hex2(hi, lo byte) (byte, bool) {
+	a, ok1 := hexNibble(hi)
+	b, ok2 := hexNibble(lo)
+	if !ok1 || !ok2 {
+		return 0, false
+	}
+	return (a << 4) | b, true
+}
+
+//go:nosplit
+func hexNibble(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	}
+	return 0, false
+}
+
 // Lookup busca el vendedor de una MAC siguiendo el orden de precedencia.
 func (db *VendorDB) Lookup(mac string) string {
 	normMAC := normalizeMAC(mac)
 	if len(normMAC) != 12 {
-		return "Desconocido" // MAC inválida
+		return "Unknown" // MAC inválida
 	}
 
 	// 1. Mapa MAC Personalizado (coincidencia de prefijo más largo)
@@ -87,7 +148,32 @@ func (db *VendorDB) Lookup(mac string) string {
 		}
 	}
 
-	// 3. Mapa OUI (24 bits / 6 caracteres)
+	// 3. OUI: preferir índice binario pre-ordenado *[Regla 67]*.
+	if db.ouiBin != nil {
+		var p [3]byte
+		// Parseo manual hex → byte (sin asignaciones, sin strconv).
+		// *[Regla 62]*.
+		if b, ok := hex2(normMAC[0], normMAC[1]); ok {
+			p[0] = b
+		} else {
+			goto fallback
+		}
+		if b, ok := hex2(normMAC[2], normMAC[3]); ok {
+			p[1] = b
+		} else {
+			goto fallback
+		}
+		if b, ok := hex2(normMAC[4], normMAC[5]); ok {
+			p[2] = b
+		} else {
+			goto fallback
+		}
+		if vendor, ok := db.ouiBin.lookup(p); ok {
+			return vendor
+		}
+	}
+fallback:
+	// Fallback al mapa (compatibilidad si el .bin no se pudo generar).
 	if len(db.ouiVendors) > 0 {
 		prefix := normMAC[:6]
 		if vendor, ok := db.ouiVendors[prefix]; ok {
@@ -102,18 +188,18 @@ func (db *VendorDB) Lookup(mac string) string {
 		// Usamos Sscanf para parsear el hex del primer byte
 		fmt.Sscanf(normMAC[:2], "%02X", &firstByte)
 		if (firstByte & 0x02) != 0 {
-			return "Desconocido (Administrado Localmente)"
+			return "Unknown (Locally Administered)"
 		}
 	}
 
-	return "Desconocido"
+	return "Unknown"
 }
 
 // loadOUIMap carga el fichero OUI.
 func loadOUIMap(path string, verbosity int) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("error al abrir: %w", err)
+		return nil, fmt.Errorf("error opening: %w", err)
 	}
 	defer file.Close()
 
@@ -137,10 +223,10 @@ func loadOUIMap(path string, verbosity int) (map[string]string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error al leer: %w", err)
+		return nil, fmt.Errorf("error reading: %w", err)
 	}
 	if verbosity >= 2 && len(vendors) > 0 {
-		log.Printf("Se cargaron %d vendedores OUI desde %s", len(vendors), path)
+		log.Printf("Loaded %d OUI vendors from %s", len(vendors), path)
 	}
 	return vendors, nil
 }
@@ -149,7 +235,7 @@ func loadOUIMap(path string, verbosity int) (map[string]string, error) {
 func loadIABMap(path string, verbosity int) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("error al abrir: %w", err)
+		return nil, fmt.Errorf("error opening: %w", err)
 	}
 	defer file.Close()
 
@@ -172,10 +258,10 @@ func loadIABMap(path string, verbosity int) (map[string]string, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error al leer: %w", err)
+		return nil, fmt.Errorf("error reading: %w", err)
 	}
 	if verbosity >= 2 && len(vendors) > 0 {
-		log.Printf("Se cargaron %d vendedores IAB desde %s", len(vendors), path)
+		log.Printf("Loaded %d IAB vendors from %s", len(vendors), path)
 	}
 	return vendors, nil
 }
@@ -184,7 +270,7 @@ func loadIABMap(path string, verbosity int) (map[string]string, error) {
 func loadCustomMACMap(path string, verbosity int) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("error al abrir: %w", err)
+		return nil, fmt.Errorf("error opening: %w", err)
 	}
 	defer file.Close()
 
@@ -200,7 +286,7 @@ func loadCustomMACMap(path string, verbosity int) (map[string]string, error) {
 
 		parts := strings.Fields(line)
 		if len(parts) < 2 {
-			log.Printf("Advertencia: formato inválido en %s línea %d: %s", path, lineNum, line)
+			log.Printf("Warning: invalid format in %s line %d: %s", path, lineNum, line)
 			continue
 		}
 
@@ -210,12 +296,43 @@ func loadCustomMACMap(path string, verbosity int) (map[string]string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error al leer: %w", err)
+		return nil, fmt.Errorf("error reading: %w", err)
 	}
 	if verbosity >= 2 && len(vendors) > 0 {
-		log.Printf("Se cargaron %d vendedores personalizados desde %s", len(vendors), path)
+		log.Printf("Loaded %d custom vendors from %s", len(vendors), path)
 	}
 	return vendors, nil
+}
+
+// UpdateVendorFiles fuerza la actualización de OUI/IAB y regenera el índice
+// binario OUI. Es cold-path explícito: no participa en el escaneo.
+func UpdateVendorFiles(ouiPath, iabPath, ouiURL, iabURL string, verbosity int) error {
+	if err := downloadFileAtomic(iabPath, iabURL, "IAB"); err != nil {
+		return err
+	}
+	if err := downloadFileAtomic(ouiPath, ouiURL, "OUI"); err != nil {
+		return err
+	}
+
+	binPath := ouiPath + ".bin"
+	if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to invalidate %s: %w", binPath, err)
+	}
+
+	ouiMap, err := loadOUIMap(ouiPath, verbosity)
+	if err != nil {
+		return fmt.Errorf("error loading updated OUI to generate binary index: %w", err)
+	}
+	if len(ouiMap) == 0 {
+		return fmt.Errorf("updated OUI contains no valid entries")
+	}
+	if verbosity >= 1 {
+		log.Printf("Regenerating pre-sorted binary OUI index at %s...", binPath)
+	}
+	if err := BuildBinFile(binPath, ouiMap); err != nil {
+		return fmt.Errorf("failed to regenerate %s: %w", binPath, err)
+	}
+	return nil
 }
 
 // EnsureFile comprueba si un fichero existe y lo descarga si es necesario.
@@ -223,46 +340,86 @@ func EnsureFile(path, url, fileType string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("error al verificar el archivo %s: %w", fileType, err)
+		return fmt.Errorf("error checking %s file: %w", fileType, err)
 	}
 
-	// --- INICIO DE MODIFICACIÓN: Crear directorio padre si no existe ---
+	return downloadFileAtomic(path, url, fileType)
+}
+
+func downloadFileAtomic(path, url, fileType string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("fallo al crear el directorio para %s en %s: %w", fileType, dir, err)
+		return fmt.Errorf("failed to create directory for %s at %s: %w", fileType, dir, err)
 	}
-	// --- FIN DE MODIFICACIÓN ---
 
-	log.Printf("Archivo %s no encontrado. Descargando desde %s a %s...", fileType, url, path)
+	log.Printf("Downloading %s file from %s to %s...", fileType, url, path)
+
+	if strings.HasPrefix(url, "file://") {
+		srcPath := strings.TrimPrefix(url, "file://")
+		src, err := os.Open(srcPath)
+		if err != nil {
+			return fmt.Errorf("failed to open local source for %s: %w", fileType, err)
+		}
+		defer src.Close()
+		if err := writeFileAtomic(path, src, fileType); err != nil {
+			return err
+		}
+		log.Printf("%s file downloaded and saved successfully to %s", fileType, path)
+		return nil
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("fallo al crear la solicitud HTTP para %s: %w", fileType, err)
+		return fmt.Errorf("failed to create HTTP request for %s: %w", fileType, err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("fallo al descargar el archivo %s: %w", fileType, err)
+		return fmt.Errorf("failed to download %s file: %w", fileType, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fallo al descargar el archivo %s: se recibió el código de estado %d", fileType, resp.StatusCode)
+		return fmt.Errorf("failed to download %s file: received status code %d", fileType, resp.StatusCode)
 	}
 
-	file, err := os.Create(path)
+	if err := writeFileAtomic(path, resp.Body, fileType); err != nil {
+		return err
+	}
+
+	log.Printf("%s file downloaded and saved successfully to %s", fileType, path)
+	return nil
+}
+
+func writeFileAtomic(path string, r io.Reader, fileType string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
-		return fmt.Errorf("fallo al crear el archivo %s local: %w", fileType, err)
+		return fmt.Errorf("failed to create temporary file for %s: %w", fileType, err)
 	}
-	defer file.Close()
+	tmpName := tmp.Name()
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.Remove(tmpName)
+		}
+	}()
 
-	_, err = io.Copy(file, resp.Body)
-	if err != nil {
-		return fmt.Errorf("fallo al guardar el archivo %s: %w", fileType, err)
+	if _, err = io.Copy(tmp, r); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("failed to save %s file: %w", fileType, err)
 	}
-
-	log.Printf("Archivo %s descargado y guardado exitosamente en %s", fileType, path)
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temporary %s file: %w", fileType, err)
+	}
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("failed to set permissions for %s: %w", fileType, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("failed to publish local %s file: %w", fileType, err)
+	}
+	removeTmp = false
 	return nil
 }

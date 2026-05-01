@@ -56,6 +56,12 @@ type Config struct {
 	VlanID            uint16
 	Snaplen           int
 	ProgressBar       *progressbar.ProgressBar
+	// Fast activa el motor zero-allocation AF_PACKET (solo Linux).
+	// Si las flags avanzadas no son compatibles, FastEligible devuelve false
+	// y el runner cae al motor original.
+	Fast bool
+	// RandomSeed siembra la permutación Feistel del motor fast. 0 = fija.
+	RandomSeed int64
 }
 
 // Estados atómicos
@@ -90,7 +96,7 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	// Timeout corto (10ms) para evitar bloqueo de goroutine al salir
 	handle, err := pcap.OpenLive(cfg.Interface.Name, int32(cfg.Snaplen), true, 10*time.Millisecond)
 	if err != nil {
-		return nil, fmt.Errorf("no se pudo abrir el handle de pcap: %w", err)
+		return nil, fmt.Errorf("could not open pcap handle: %w", err)
 	}
 
 	bpfFilter := "arp"
@@ -98,11 +104,11 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		bpfFilter = fmt.Sprintf("vlan %d and arp", cfg.VlanID)
 	}
 	if cfg.Verbosity >= 2 {
-		log.Printf("Estableciendo filtro pcap BPF: '%s'", bpfFilter)
+		log.Printf("Setting pcap BPF filter: %q", bpfFilter)
 	}
 	if err := handle.SetBPFFilter(bpfFilter); err != nil {
 		handle.Close()
-		return nil, fmt.Errorf("no se pudo establecer el filtro BPF: %w", err)
+		return nil, fmt.Errorf("could not set BPF filter: %w", err)
 	}
 
 	results := make(chan ScanResult, 100) // Buffer pequeño
@@ -116,7 +122,7 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		if cfg.PcapSaveFile != "" {
 			f, err := os.Create(cfg.PcapSaveFile)
 			if err != nil {
-				log.Printf("CRÍTICO: No se pudo crear el archivo pcap '%s': %v.", cfg.PcapSaveFile, err)
+				log.Printf("CRITICAL: Could not create pcap file %q: %v.", cfg.PcapSaveFile, err)
 			} else {
 				defer f.Close()
 				pcapWriter = pcapgo.NewWriter(f)
@@ -145,7 +151,7 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		var wgSenders sync.WaitGroup
 		ifaceIPNet, err := GetSrcIPNet(cfg.Interface)
 		if err != nil {
-			log.Printf("CRÍTICO: no se pudo obtener la IP de la interfaz: %v", err)
+			log.Printf("CRITICAL: could not get interface IP: %v", err)
 			cancel()
 		} else {
 			for i := 0; i < numSenders; i++ {
@@ -160,9 +166,9 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	main_loop:
 		for pass := 0; pass < cfg.Retry; pass++ {
 			if cfg.ProgressBar != nil {
-				msg := "Sondeando..."
+				msg := "Probing..."
 				if cfg.Retry > 1 {
-					msg = fmt.Sprintf("Pase %d/%d: Sondeando...", pass+1, cfg.Retry)
+					msg = fmt.Sprintf("Pass %d/%d: Probing...", pass+1, cfg.Retry)
 				}
 				cfg.ProgressBar.Describe(msg)
 			}
@@ -187,7 +193,7 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 
 			remaining := atomic.LoadInt64(&pendingTargets)
 			if cfg.Verbosity >= 1 {
-				log.Printf("Fin de la pasada %d. Hosts restantes: %d", pass+1, remaining)
+				log.Printf("End of pass %d. Hosts remaining: %d", pass+1, remaining)
 			}
 
 			currentHostTimeout := float64(cfg.HostTimeout)
@@ -272,7 +278,7 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 			}
 
 			if cfg.Verbosity >= 2 {
-				log.Printf("Enviando ARP a %s desde %s", dstIPv4, sourceIP)
+				log.Printf("Sending ARP to %s from %s", dstIPv4, sourceIP)
 			}
 			sendARP(handle, cfg.Interface, cfg, sourceIP, dstIPv4, buf, opts)
 			buf.Clear()
@@ -321,7 +327,7 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 
 			if arp.Operation == layers.ARPReply && pcapWriter != nil {
 				if err := pcapWriter.WritePacket(ci, data); err != nil {
-					log.Printf("Advertencia pcap: %v", err)
+					log.Printf("pcap warning: %v", err)
 				}
 			}
 
@@ -333,7 +339,7 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 			target, found := targets[key]
 			if !found {
 				if cfg.Verbosity >= 1 {
-					log.Printf("Recibida respuesta de desconocido: %s", net.IP(arp.SourceProtAddress))
+					log.Printf("Received reply from unknown target: %s", net.IP(arp.SourceProtAddress))
 				}
 				continue
 			}
@@ -342,7 +348,7 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 			srcMACStr := net.HardwareAddr(arp.SourceHwAddress).String()
 
 			if cfg.Verbosity >= 2 {
-				log.Printf("Recibido ARP Reply de %s [%s]", srcIPStr, srcMACStr)
+				log.Printf("Received ARP Reply from %s [%s]", srcIPStr, srcMACStr)
 			}
 
 			var rtt time.Duration
@@ -355,7 +361,7 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 				atomic.CompareAndSwapInt32(&target.Status, StatusPending, StatusReplied) {
 				atomic.AddInt64(pendingTargets, -1)
 				if cfg.Verbosity >= 2 {
-					log.Printf("Target %s respondido. RTT: %v", srcIPStr, rtt)
+					log.Printf("Target %s replied. RTT: %v", srcIPStr, rtt)
 				}
 			}
 
@@ -367,16 +373,32 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 
 func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstIP net.IP, buf gopacket.SerializeBuffer, opts gopacket.SerializeOptions) {
 	var sourceEthMAC, destinationEthMAC, sourceArpSHA net.HardwareAddr
-	if cfg.EthSrcMAC != nil { sourceEthMAC = cfg.EthSrcMAC } else { sourceEthMAC = iface.HardwareAddr }
-	if cfg.EthDstMAC != nil { destinationEthMAC = cfg.EthDstMAC } else { destinationEthMAC = net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff} }
-	if cfg.ArpSHA != nil { sourceArpSHA = cfg.ArpSHA } else { sourceArpSHA = iface.HardwareAddr }
+	if cfg.EthSrcMAC != nil {
+		sourceEthMAC = cfg.EthSrcMAC
+	} else {
+		sourceEthMAC = iface.HardwareAddr
+	}
+	if cfg.EthDstMAC != nil {
+		destinationEthMAC = cfg.EthDstMAC
+	} else {
+		destinationEthMAC = net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	}
+	if cfg.ArpSHA != nil {
+		sourceArpSHA = cfg.ArpSHA
+	} else {
+		sourceArpSHA = iface.HardwareAddr
+	}
 
 	var destinationArpTHA []byte
-	if cfg.ArpTHA != nil { destinationArpTHA = []byte(cfg.ArpTHA) } else { destinationArpTHA = []byte{0, 0, 0, 0, 0, 0} }
+	if cfg.ArpTHA != nil {
+		destinationArpTHA = []byte(cfg.ArpTHA)
+	} else {
+		destinationArpTHA = []byte{0, 0, 0, 0, 0, 0}
+	}
 
 	eth := layers.Ethernet{
-		SrcMAC: sourceEthMAC,
-		DstMAC: destinationEthMAC,
+		SrcMAC:       sourceEthMAC,
+		DstMAC:       destinationEthMAC,
 		EthernetType: layers.EthernetType(cfg.EthernetPrototype),
 	}
 	arp := layers.ARP{
@@ -416,19 +438,27 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 	if len(cfg.PaddingData) > 0 {
 		layersToSerialize = append(layersToSerialize, gopacket.Payload(cfg.PaddingData))
 	}
-	if err := gopacket.SerializeLayers(buf, opts, layersToSerialize...); err != nil { return }
+	if err := gopacket.SerializeLayers(buf, opts, layersToSerialize...); err != nil {
+		return
+	}
 	if err := handle.WritePacketData(buf.Bytes()); err != nil {
-		if cfg.Verbosity >= 2 { log.Printf("Error sending: %v", err) }
+		if cfg.Verbosity >= 2 {
+			log.Printf("Error sending: %v", err)
+		}
 	}
 }
 
 func GetSrcIPNet(iface *net.Interface) (*net.IPNet, error) {
 	addrs, err := iface.Addrs()
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil { return ipnet, nil }
+			if ipnet.IP.To4() != nil {
+				return ipnet, nil
+			}
 		}
 	}
-	return nil, fmt.Errorf("no se encontró una dirección IPv4 en la interfaz %s", iface.Name)
+	return nil, fmt.Errorf("no IPv4 address found on interface %s", iface.Name)
 }

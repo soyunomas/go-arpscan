@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath" // <--- NUEVO IMPORT
+	"runtime/pprof"
 	"time"
 
 	"github.com/fatih/color"
@@ -75,26 +76,30 @@ var (
 
 	// versionFlag se usa para comprobar si se ha solicitado la versión.
 	versionFlag bool
+
+	// cpuProfilePath activa pprof solo bajo demanda. Es cold path: no toca
+	// las rutinas TX/RX ni introduce checks en el bucle caliente.
+	cpuProfilePath string
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "go-arpscan [options] [hosts...]",
-	Short: "go-arpscan es un escáner de red ARP rápido y moderno escrito en Go.",
-	Long: `Envía paquetes ARP a los hosts de la red local y muestra las respuestas recibidas.
+	Short: "go-arpscan is a fast, modern ARP network scanner written in Go.",
+	Long: `Sends ARP packets to hosts on the local network and displays the replies.
 
-Los hosts de destino deben especificarse en la línea de comandos a menos que se use la opción --file,
-en cuyo caso los destinos se leen desde el archivo especificado, o si se usa la opción --localnet,
-en cuyo caso los destinos se generan a partir de la dirección IP y la máscara de red de la interfaz.
+Target hosts must be specified on the command line unless --file is used,
+in which case targets are read from the specified file, or --localnet is used,
+in which case targets are generated from the interface IP address and netmask.
 
-Las opciones se pueden definir en ficheros de configuración y perfiles.
-La prioridad es: Flags > Perfil > Configuración > Defaults.
+Options can be defined in configuration files and profiles.
+Priority is: Flags > Profile > Configuration > Defaults.
 
-Es necesario ejecutar go-arpscan como root.`,
+go-arpscan must be run as root.`,
 	Example: `  sudo ./go-arpscan --localnet --progress
   sudo ./go-arpscan -I eth0 192.168.1.0/24
   sudo ./go-arpscan -I eth0 192.168.1.1-192.168.1.254
   sudo ./go-arpscan --file=hostlist.txt --json
-  sudo ./go-arpscan --config=mi_perfil.yaml --localnet
+  sudo ./go-arpscan --config=my_profile.yaml --localnet
   sudo ./go-arpscan --profile=stealth-scan-generic --localnet
   sudo ./go-arpscan -I eth0 --spoof 192.168.1.10 --gateway 192.168.1.1
   sudo ./go-arpscan --localnet --monitor --monitor-interval 5m
@@ -129,25 +134,42 @@ Es necesario ejecutar go-arpscan como root.`,
 		case "auto":
 			// El comportamiento por defecto de la librería es auto.
 		default:
-			log.Fatalf("Valor inválido para --color: %s. Use 'auto', 'on', o 'off'.", cfg.ColorMode)
+			log.Fatalf("Invalid value for --color: %s. Use 'auto', 'on', or 'off'.", cfg.ColorMode)
 		}
 	},
 
 	// Run contiene la lógica principal de la aplicación.
 	Run: func(cmd *cobra.Command, args []string) {
-		if os.Geteuid() != 0 {
-			log.Fatal("Este programa debe ser ejecutado como root.")
+		if !cfg.UpdateVendors && os.Geteuid() != 0 {
+			log.Fatal("This program must be run as root.")
+		}
+
+		if cpuProfilePath != "" {
+			f, err := os.Create(cpuProfilePath)
+			if err != nil {
+				log.Fatalf("Could not create --cpuprofile %s: %v", cpuProfilePath, err)
+			}
+			if err := pprof.StartCPUProfile(f); err != nil {
+				_ = f.Close()
+				log.Fatalf("Could not start CPU profile: %v", err)
+			}
+			defer func() {
+				pprof.StopCPUProfile()
+				if err := f.Close(); err != nil {
+					log.Printf("closing CPU profile: %v", err)
+				}
+			}()
 		}
 
 		// Creamos una instancia del Runner, el orquestador principal.
 		appRunner, err := runner.New(cfg, args)
 		if err != nil {
-			log.Fatalf("Error inicializando la aplicación: %v", err)
+			log.Fatalf("Error initializing application: %v", err)
 		}
 
 		// Ejecutamos la lógica principal.
 		if err := appRunner.Run(); err != nil {
-			log.Fatalf("Error durante la ejecución: %v", err)
+			log.Fatalf("Runtime error: %v", err)
 		}
 	},
 }
@@ -184,85 +206,88 @@ func init() {
 	// ---------------------------------------------------------
 
 	// --- Gestión de Configuración y Perfiles ---
-	rootCmd.PersistentFlags().String("config", "", "Ruta al fichero de configuración YAML (por defecto ~/.config/go-arpscan/config.yaml).")
-	rootCmd.PersistentFlags().String("profiles", "", "Ruta al fichero de perfiles YAML (busca en ./ y ~/.config/go-arpscan/).")
-	rootCmd.PersistentFlags().String("profile", "", "Activa un perfil táctico desde el fichero de perfiles (e.g., 'stealth-scan-generic').")
+	rootCmd.PersistentFlags().String("config", "", "Path to the YAML configuration file (defaults to ~/.config/go-arpscan/config.yaml).")
+	rootCmd.PersistentFlags().String("profiles", "", "Path to the YAML profiles file (searches ./ and ~/.config/go-arpscan/).")
+	rootCmd.PersistentFlags().String("profile", "", "Enable a tactical profile from the profiles file (e.g., 'stealth-scan-generic').")
 
 	// --- Selección de Interfaz y Objetivos ---
-	rootCmd.PersistentFlags().StringP("interface", "I", "", "Usa la interfaz de red <s>. Si no se especifica, se auto-detecta.")
-	rootCmd.PersistentFlags().Duration("scan-timeout", 20*time.Second, "Establece un timeout global de <d> para el escaneo completo.\n(calculado automáticamente si no se especifica)")
-	rootCmd.Flags().BoolP("localnet", "l", false, "Escanea la red local de la interfaz especificada.")
-	rootCmd.Flags().StringP("file", "f", "", "Lee los nombres de host o direcciones desde el archivo especificado s>.\nUn nombre o dirección IP por línea. Usa \"-\" para la entrada estándar.")
-	rootCmd.Flags().StringSlice("exclude", nil, "Excluye IPs o rangos CIDR del escaneo (e.g., --exclude 1.1.1.1,1.1.2.0/24).")
-	rootCmd.Flags().String("exclude-file", "", "Excluye los objetivos listados en el fichero especificado <s>.")
-	rootCmd.Flags().BoolP("numeric", "N", false, "No realizar resolución de nombres de host (DNS).")
+	rootCmd.PersistentFlags().StringP("interface", "I", "", "Use network interface <s>. If omitted, it is auto-detected.")
+	rootCmd.PersistentFlags().Duration("scan-timeout", 20*time.Second, "Set a global timeout <d> for the full scan.\n(computed automatically if omitted)")
+	rootCmd.Flags().BoolP("localnet", "l", false, "Scan the local network of the selected interface.")
+	rootCmd.Flags().StringP("file", "f", "", "Read hostnames or addresses from file <s>.\nOne hostname or IP address per line. Use \"-\" for standard input.")
+	rootCmd.Flags().StringSlice("exclude", nil, "Exclude IPs or CIDR ranges from the scan (e.g., --exclude 1.1.1.1,1.1.2.0/24).")
+	rootCmd.Flags().String("exclude-file", "", "Exclude targets listed in file <s>.")
+	rootCmd.Flags().BoolP("numeric", "N", false, "Do not perform hostname resolution (DNS).")
 
 	// --- Control del Escaneo ---
-	rootCmd.Flags().DurationP("host-timeout", "t", 500*time.Millisecond, "Establece el timeout inicial por host a <d> (e.g., 500ms, 1s).\nEste timeout es para el primer paquete enviado a cada host. Los timeouts\nsubsiguientes se multiplican por el factor de backoff.")
-	rootCmd.Flags().IntP("retry", "r", 2, "Establece el número total de intentos por host a <i> .\nUn valor de 1 significa que solo se envía un paquete (sin reintentos).")
-	rootCmd.Flags().DurationP("interval", "i", 1*time.Millisecond, "Establece el intervalo mínimo entre el envío de paquetes a <d>.\nEsto controla el ancho de banda de salida. Para un control más intuitivo,\nconsidere usar --bandwidth.")
-	rootCmd.Flags().StringP("bandwidth", "B", "", "Establece el ancho de banda de salida deseado a <x> (e.g., 1M, 256k).\nEl valor es en bits/segundo. Soporta sufijos K, M, G (decimales).\nNo se puede usar junto con --interval.")
-	rootCmd.Flags().Float64P("backoff", "b", 1.5, "Establece el factor de backoff del timeout a <f>.\nEl timeout por host se multiplica por este factor después de cada reintento.")
-	rootCmd.Flags().BoolP("random", "R", false, "Aleatoriza el orden de los hosts en la lista de objetivos.\nEsto hace que los paquetes ARP se envíen en un orden aleatorio.")
-	rootCmd.Flags().Int64("randomseed", 0, "Usa <i> como semilla para el generador de números pseudoaleatorios.\nÚtil para obtener un orden aleatorio reproducible. Solo efectivo con --random.")
+	rootCmd.Flags().DurationP("host-timeout", "t", 500*time.Millisecond, "Set the initial per-host timeout to <d> (e.g., 500ms, 1s).\nThis timeout applies to the first packet sent to each host. Later timeouts\nare multiplied by the backoff factor.")
+	rootCmd.Flags().IntP("retry", "r", 2, "Set the total number of attempts per host to <i>.\nA value of 1 means only one packet is sent (no retries).")
+	rootCmd.Flags().DurationP("interval", "i", 1*time.Millisecond, "Set the minimum interval between sent packets to <d>.\nThis controls outbound bandwidth. For a more intuitive control,\nconsider using --bandwidth.")
+	rootCmd.Flags().StringP("bandwidth", "B", "", "Set the desired outbound bandwidth to <x> (e.g., 1M, 256k).\nThe value is in bits/second. Supports decimal K, M, G suffixes.\nCannot be used together with --interval.")
+	rootCmd.Flags().Float64P("backoff", "b", 1.5, "Set the timeout backoff factor to <f>.\nThe per-host timeout is multiplied by this factor after each retry.")
+	rootCmd.Flags().BoolP("random", "R", false, "Randomize target host order.\nThis sends ARP packets in random order.")
+	rootCmd.Flags().Int64("randomseed", 0, "Use <i> as the pseudo-random generator seed.\nUseful for reproducible random order. Only effective with --random.")
 
 	// --- Explotación Activa ---
-	rootCmd.Flags().String("spoof", "", "Activa el modo de suplantación ARP contra una IP objetivo.")
-	rootCmd.Flags().String("gateway", "", "Especifica la IP del gateway para el ataque de suplantación (--spoof).")
-	rootCmd.Flags().String("detect-promisc", "", "Detecta si un host está en modo promiscuo enviando un paquete ARP con MAC de destino incorrecta.")
-	rootCmd.Flags().Duration("spoof-interval", 2*time.Second, "Intervalo entre paquetes en el modo de suplantación.")
-	rootCmd.Flags().Duration("spoof-mac-timeout", 3*time.Second, "Timeout para obtener las MACs en el modo de suplantación.")
-	rootCmd.Flags().Duration("spoof-restore-duration", 1*time.Second, "Duración de la fase de restauración de caché ARP.")
-	rootCmd.Flags().Duration("spoof-restore-interval", 100*time.Millisecond, "Intervalo de los paquetes de restauración de caché ARP.")
+	rootCmd.Flags().String("spoof", "", "Enable ARP spoofing mode against a target IP.")
+	rootCmd.Flags().String("gateway", "", "Set the gateway IP for the spoofing attack (--spoof).")
+	rootCmd.Flags().String("detect-promisc", "", "Detect whether a host is in promiscuous mode by sending an ARP packet with an incorrect destination MAC.")
+	rootCmd.Flags().Duration("spoof-interval", 2*time.Second, "Interval between packets in spoofing mode.")
+	rootCmd.Flags().Duration("spoof-mac-timeout", 3*time.Second, "Timeout for resolving MAC addresses in spoofing mode.")
+	rootCmd.Flags().Duration("spoof-restore-duration", 1*time.Second, "Duration of the ARP cache restoration phase.")
+	rootCmd.Flags().Duration("spoof-restore-interval", 100*time.Millisecond, "Packet interval during ARP cache restoration.")
 
 	// --- Manipulación de Paquetes (Avanzado) ---
-	rootCmd.Flags().StringP("arpspa", "s", "", "Usa <a> como la dirección IP de origen en los paquetes ARP.\nPor defecto, se utiliza la dirección IP de la interfaz de salida.\nAlgunos sistemas operativos solo responden si la IP de origen\npertenece a su misma subred. Valor especial: \"dest\" para usar la IP de destino.")
-	rootCmd.Flags().StringP("arpsha", "u", "", "Usa <m> como la dirección MAC de origen en los paquetes ARP (SHA).\nPor defecto, se utiliza la MAC de la interfaz de salida.")
-	rootCmd.Flags().StringP("srcaddr", "S", "", "Usa <m> como la dirección MAC de origen de la trama Ethernet.\nPor defecto, se utiliza la MAC de la interfaz de salida.")
-	rootCmd.Flags().IntP("arpop", "o", 1, "Especifica el código de operación ARP <i> .\n1=Request (por defecto), 2=Reply.")
-	rootCmd.Flags().StringP("destaddr", "T", "", "Usa <m> como la dirección MAC de destino de la trama Ethernet.\nPor defecto, se usa la dirección de broadcast (ff:ff:ff:ff:ff:ff).")
-	rootCmd.Flags().StringP("arptha", "w", "", "Usa <m> como la dirección MAC de destino en el paquete ARP (THA).\nPor defecto, se usa una dirección cero (00:00:00:00:00:00).")
-	rootCmd.Flags().StringP("prototype", "y", "0x0806", "Establece el tipo de protocolo Ethernet a <i> (e.g., 0x0806).\nPor defecto es 0x0806 (ARP).")
-	rootCmd.Flags().IntP("arphrd", "H", 1, "Usa <i> para el tipo de hardware ARP (ar$hrd).\nEl valor normal es 1 (Ethernet).")
-	rootCmd.Flags().StringP("arppro", "p", "0x0800", "Usa <i> para el tipo de protocolo ARP (ar$pro) (e.g., 0x0800).\nPor defecto es 0x0800 (IPv4).")
-	rootCmd.Flags().IntP("arphln", "a", 6, "Establece la longitud de la dirección de hardware a <i> (ar$hln).\nPor defecto es 6 para Ethernet.")
-	rootCmd.Flags().IntP("arppln", "P", 4, "Establece la longitud de la dirección de protocolo a <i> (ar$pln).\nPor defecto es 4 para IPv4.")
-	rootCmd.Flags().StringP("padding", "A", "", "Añade datos de relleno (padding) en formato hexadecimal <h> al final del paquete.")
-	rootCmd.Flags().BoolP("llc", "L", false, "Usa framing RFC 1042 LLC con SNAP.")
-	rootCmd.Flags().IntP("vlan", "Q", 0, "Especifica el ID de VLAN 802.1Q <i> (1-4094).")
-	rootCmd.Flags().IntP("snap", "n", 65536, "Establece la longitud de captura pcap a <i> bytes.")
+	rootCmd.Flags().StringP("arpspa", "s", "", "Use <a> as the source IP address in ARP packets.\nBy default, the outgoing interface IP address is used.\nSome operating systems only reply if the source IP belongs\nto their subnet. Special value: \"dest\" uses the target IP.")
+	rootCmd.Flags().StringP("arpsha", "u", "", "Use <m> as the source MAC address in ARP packets (SHA).\nBy default, the outgoing interface MAC address is used.")
+	rootCmd.Flags().StringP("srcaddr", "S", "", "Use <m> as the source MAC address in the Ethernet frame.\nBy default, the outgoing interface MAC address is used.")
+	rootCmd.Flags().IntP("arpop", "o", 1, "Set the ARP operation code to <i>.\n1=Request (default), 2=Reply.")
+	rootCmd.Flags().StringP("destaddr", "T", "", "Use <m> as the destination MAC address in the Ethernet frame.\nBy default, the broadcast address is used (ff:ff:ff:ff:ff:ff).")
+	rootCmd.Flags().StringP("arptha", "w", "", "Use <m> as the destination MAC address in the ARP packet (THA).\nBy default, a zero MAC is used (00:00:00:00:00:00).")
+	rootCmd.Flags().StringP("prototype", "y", "0x0806", "Set the Ethernet protocol type to <i> (e.g., 0x0806).\nDefault is 0x0806 (ARP).")
+	rootCmd.Flags().IntP("arphrd", "H", 1, "Use <i> as the ARP hardware type (ar$hrd).\nThe normal value is 1 (Ethernet).")
+	rootCmd.Flags().StringP("arppro", "p", "0x0800", "Use <i> as the ARP protocol type (ar$pro) (e.g., 0x0800).\nDefault is 0x0800 (IPv4).")
+	rootCmd.Flags().IntP("arphln", "a", 6, "Set the hardware address length to <i> (ar$hln).\nDefault is 6 for Ethernet.")
+	rootCmd.Flags().IntP("arppln", "P", 4, "Set the protocol address length to <i> (ar$pln).\nDefault is 4 for IPv4.")
+	rootCmd.Flags().StringP("padding", "A", "", "Append padding data in hexadecimal format <h> to the end of the packet.")
+	rootCmd.Flags().BoolP("llc", "L", false, "Use RFC 1042 LLC framing with SNAP.")
+	rootCmd.Flags().IntP("vlan", "Q", 0, "Set the 802.1Q VLAN ID <i> (1-4094).")
+	rootCmd.Flags().IntP("snap", "n", 65536, "Set the pcap capture length to <i> bytes.")
 
 	// --- Monitorización Continua ---
-	rootCmd.Flags().Bool("monitor", false, "Activa el modo monitor para detectar cambios en la red en tiempo real.")
-	rootCmd.Flags().Duration("monitor-interval", 5*time.Minute, "Intervalo para los sondeos activos en modo monitor (e.g., '10m', '1h').")
-	rootCmd.Flags().Duration("monitor-removal-threshold", 15*time.Minute, "Tiempo de inactividad antes de que un host sea considerado 'eliminado' en modo monitor.")
+	rootCmd.Flags().Bool("monitor", false, "Enable monitor mode to detect network changes in real time.")
+	rootCmd.Flags().Duration("monitor-interval", 5*time.Minute, "Interval for active probes in monitor mode (e.g., '10m', '1h').")
+	rootCmd.Flags().Duration("monitor-removal-threshold", 15*time.Minute, "Inactivity duration before a host is considered removed in monitor mode.")
 	// <<< INICIO DE NUEVOS FLAGS PARA DETECCIÓN DE SPOOFING >>>
-	rootCmd.Flags().Bool("detect-arp-spoofing", false, "Activa la detección de suplantación ARP en modo monitor. Requiere --monitor-gateway.")
-	rootCmd.Flags().String("monitor-gateway", "", "IP del gateway a proteger con --detect-arp-spoofing.")
+	rootCmd.Flags().Bool("detect-arp-spoofing", false, "Enable ARP spoofing detection in monitor mode. Requires --monitor-gateway.")
+	rootCmd.Flags().String("monitor-gateway", "", "Gateway IP to protect with --detect-arp-spoofing.")
 	// <<< FIN DE NUEVOS FLAGS PARA DETECCIÓN DE SPOOFING >>>
-	rootCmd.Flags().String("webhook-url", "", "URL del webhook para enviar eventos en modo monitor.")
-	rootCmd.Flags().StringSlice("webhook-header", nil, "Cabecera HTTP para la petición webhook (e.g., 'Auth: Bearer ...'). Se puede repetir.")
+	rootCmd.Flags().String("webhook-url", "", "Webhook URL for sending monitor-mode events.")
+	rootCmd.Flags().StringSlice("webhook-header", nil, "HTTP header for the webhook request (e.g., 'Auth: Bearer ...'). Can be repeated.")
 
 	// --- Ficheros de Datos y Vendors ---
 	// MODIFICACIÓN: Usamos las rutas por defecto calculadas al inicio de init()
-	rootCmd.Flags().StringP("ouifile", "O", defaultOUI, "Usa el fichero de mapeo OUI de IEEE a vendor s>.\nPor defecto, se busca en "+defaultOUI+" y se descarga si no existe.")
-	rootCmd.Flags().String("iabfile", defaultIAB, "Usa el fichero de mapeo IAB de IEEE a vendor a>.\nPor defecto, se busca en "+defaultIAB+" y se descarga si no existe.")
-	rootCmd.Flags().String("macfile", "", "Usa el fichero personalizado de mapeo MAC/prefijo a vendor s>.")
+	rootCmd.Flags().StringP("ouifile", "O", defaultOUI, "Use the IEEE OUI-to-vendor mapping file <s>.\nBy default, "+defaultOUI+" is searched and downloaded if missing.")
+	rootCmd.Flags().String("iabfile", defaultIAB, "Use the IEEE IAB-to-vendor mapping file <s>.\nBy default, "+defaultIAB+" is searched and downloaded if missing.")
+	rootCmd.Flags().String("macfile", "", "Use a custom MAC/prefix-to-vendor mapping file <s>.")
+	rootCmd.Flags().Bool("update-vendors", false, "Update OUI/IAB from IEEE, regenerate the binary OUI index, and exit.")
 
 	// --- Formato de Salida y UI ---
-	rootCmd.Flags().BoolP("quiet", "q", false, "Muestra solo salida mínima (IP y MAC).\nNo se realiza decodificación de protocolos y no se usan los ficheros de mapeo OUI.")
-	rootCmd.Flags().BoolP("plain", "x", false, "Muestra una salida simple que solo contiene los hosts que responden.\nSuprime la cabecera y el pie de página, útil para scripts.")
-	rootCmd.Flags().Bool("json", false, "Muestra la salida completa en formato JSON.")
-	rootCmd.Flags().Bool("csv", false, "Muestra la salida en formato CSV (Comma-Separated Values).")
-	rootCmd.Flags().String("state-file", "", "Guarda los resultados del escaneo en un fichero de estado JSON s>.\nSi se usa sin --diff, suprime la salida estándar.")
-	rootCmd.Flags().Bool("diff", false, "Compara un nuevo escaneo con el fichero de estado especificado en --state-file\ny muestra las diferencias (hosts añadidos, eliminados o modificados).")
-	rootCmd.Flags().Bool("progress", false, "Muestra una barra de progreso durante el escaneo.")
-	rootCmd.Flags().BoolP("rtt", "D", false, "Muestra el tiempo de ida y vuelta (Round-Trip Time) del paquete.")
-	rootCmd.Flags().StringP("pcapsavefile", "W", "", "Guarda las respuestas ARP en un fichero pcap <s>.")
-	rootCmd.Flags().BoolP("ignoredups", "g", false, "No mostrar respuestas duplicadas.")
-	rootCmd.Flags().String("color", "auto", "Controla el uso de color en la salida (auto, on, off).")
+	rootCmd.Flags().BoolP("quiet", "q", false, "Show minimal output only (IP and MAC).\nProtocol decoding is skipped and OUI mapping files are not used.")
+	rootCmd.Flags().BoolP("plain", "x", false, "Show simple output containing only responding hosts.\nSuppresses header and footer, useful for scripts.")
+	rootCmd.Flags().Bool("json", false, "Show full output in JSON format.")
+	rootCmd.Flags().Bool("csv", false, "Show output in CSV (Comma-Separated Values) format.")
+	rootCmd.Flags().String("state-file", "", "Save scan results to JSON state file <s>.\nWhen used without --diff, standard output is suppressed.")
+	rootCmd.Flags().Bool("diff", false, "Compare a new scan with the state file specified by --state-file\nand show differences (added, removed, or modified hosts).")
+	rootCmd.Flags().Bool("progress", false, "Show a progress bar during the scan.")
+	rootCmd.Flags().BoolP("rtt", "D", false, "Show packet round-trip time (RTT).")
+	rootCmd.Flags().StringP("pcapsavefile", "W", "", "Save ARP replies to pcap file <s>.")
+	rootCmd.Flags().BoolP("ignoredups", "g", false, "Do not show duplicate replies.")
+	rootCmd.Flags().String("color", "auto", "Control color output (auto, on, off).")
 
 	// --- Varios ---
-	rootCmd.Flags().CountVarP(&cfg.VerboseCount, "verbose", "v", "Muestra mensajes de progreso detallados.\nÚsalo más de una vez para mayor efecto (-v, -vv, -vvv):\n1: Muestra finalización de pasadas y hosts desconocidos.\n2: Muestra cada paquete enviado/recibido y el filtro pcap.\n3. Muestra la lista de hosts antes de iniciar el escaneo.")
-	rootCmd.Flags().BoolVarP(&versionFlag, "version", "V", false, "Muestra la versión del programa y sale.")
+	rootCmd.Flags().CountVarP(&cfg.VerboseCount, "verbose", "v", "Show detailed progress messages.\nUse more than once for more detail (-v, -vv, -vvv):\n1: Show pass completion and unknown hosts.\n2: Show each sent/received packet and the pcap filter.\n3: Show the host list before starting the scan.")
+	rootCmd.Flags().Bool("fast", false, "Use the zero-allocation AF_PACKET engine (Linux only, scan/diff modes).\nFaster and lower-overhead than the default pcap/gopacket engine.\nIncompatible with --vlan, --llc, --padding, --pcapsavefile and advanced ARP overrides;\nin those cases it automatically falls back to the standard engine.")
+	rootCmd.Flags().StringVar(&cpuProfilePath, "cpuprofile", "", "Write a CPU pprof profile to <file> during execution.\nCold diagnostic path; use with --fast to decide whether TX_RING is worthwhile.")
+	rootCmd.Flags().BoolVarP(&versionFlag, "version", "V", false, "Show program version and exit.")
 }

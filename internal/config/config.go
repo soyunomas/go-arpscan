@@ -34,13 +34,13 @@ type ScanConfig struct {
 }
 
 type MonitorConfig struct {
-	Enabled             bool          `yaml:"enabled"`
-	Interval            time.Duration `yaml:"interval"`
-	RemovalThreshold    time.Duration `yaml:"removal-threshold"`
-	DetectArpSpoofing   bool          `yaml:"detect-arp-spoofing"` // <<< NUEVO CAMPO
-	Gateway             string        `yaml:"gateway"`             // <<< NUEVO CAMPO
-	WebhookURL          string        `yaml:"webhook-url"`
-	WebhookHeaders      []string      `yaml:"webhook-headers"`
+	Enabled           bool          `yaml:"enabled"`
+	Interval          time.Duration `yaml:"interval"`
+	RemovalThreshold  time.Duration `yaml:"removal-threshold"`
+	DetectArpSpoofing bool          `yaml:"detect-arp-spoofing"` // <<< NUEVO CAMPO
+	Gateway           string        `yaml:"gateway"`             // <<< NUEVO CAMPO
+	WebhookURL        string        `yaml:"webhook-url"`
+	WebhookHeaders    []string      `yaml:"webhook-headers"`
 }
 
 type OutputConfig struct {
@@ -178,4 +178,8 @@ type ResolvedConfig struct {
 	IgnoreDups   bool
 	ColorMode    string
 	VerboseCount int
+
+	// Fast activa el motor zero-allocation AF_PACKET (solo Linux, modo scan/diff).
+	Fast          bool
+	UpdateVendors bool
 }

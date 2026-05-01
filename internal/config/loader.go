@@ -54,23 +54,23 @@ func loadDefaultsFromFlags(cmd *cobra.Command) *ResolvedConfig {
 func applyBaseConfig(cmd *cobra.Command, cfg *ResolvedConfig) error {
 	configPath, err := findConfigFile(cfg.ConfigFilePath)
 	if err != nil {
-		log.Printf("Advertencia: no se pudo buscar el fichero de configuración: %v", err)
+		log.Printf("Warning: could not search for configuration file: %v", err)
 		return nil // No es un error fatal.
 	}
 	if configPath == "" {
 		if cmd.Flags().Changed("config") {
-			return fmt.Errorf("el fichero de configuración especificado %s no se encontró", cfg.ConfigFilePath)
+			return fmt.Errorf("specified configuration file %s was not found", cfg.ConfigFilePath)
 		}
 		return nil // No se encontró fichero, continuamos.
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return fmt.Errorf("error leyendo el fichero de configuración %s: %w", configPath, err)
+		return fmt.Errorf("error reading configuration file %s: %w", configPath, err)
 	}
 	var baseCfg AppConfig
 	if err := yaml.Unmarshal(data, &baseCfg); err != nil {
-		return fmt.Errorf("error parseando el fichero de configuración YAML %s: %w", configPath, err)
+		return fmt.Errorf("error parsing YAML configuration file %s: %w", configPath, err)
 	}
 
 	applyAppConfig(cmd, cfg, &baseCfg)
@@ -85,25 +85,25 @@ func applyProfileConfig(cmd *cobra.Command, cfg *ResolvedConfig) error {
 
 	profilesPath, err := findProfilesFile(cfg.ProfilesFilePath, cfg.ConfigFilePath)
 	if err != nil || profilesPath == "" {
-		return fmt.Errorf("--profile '%s' especificado pero no se pudo encontrar el fichero profiles.yaml: %w", cfg.ProfileName, err)
+		return fmt.Errorf("--profile %q specified but profiles.yaml could not be found: %w", cfg.ProfileName, err)
 	}
 
 	data, err := os.ReadFile(profilesPath)
 	if err != nil {
-		return fmt.Errorf("error leyendo el fichero de perfiles %s: %w", profilesPath, err)
+		return fmt.Errorf("error reading profiles file %s: %w", profilesPath, err)
 	}
 	var profilesFile ProfilesFile
 	if err := yaml.Unmarshal(data, &profilesFile); err != nil {
-		return fmt.Errorf("error parseando el fichero de perfiles YAML %s: %w", profilesPath, err)
+		return fmt.Errorf("error parsing YAML profiles file %s: %w", profilesPath, err)
 	}
 
 	profile, found := profilesFile.Profiles[cfg.ProfileName]
 	if !found {
-		return fmt.Errorf("perfil '%s' no encontrado en %s", cfg.ProfileName, profilesPath)
+		return fmt.Errorf("profile %q not found in %s", cfg.ProfileName, profilesPath)
 	}
 
 	if cfg.VerboseCount > 0 {
-		log.Printf("Aplicando perfil '%s': %s", cfg.ProfileName, profile.Description)
+		log.Printf("Applying profile %q: %s", cfg.ProfileName, profile.Description)
 	}
 	applyProfile(cmd, cfg, &profile)
 	return nil
@@ -116,7 +116,7 @@ func findConfigFile(explicitPath string) (string, error) {
 	}
 	usr, err := user.Current()
 	if err != nil {
-		return "", fmt.Errorf("no se pudo obtener el directorio del usuario actual: %w", err)
+		return "", fmt.Errorf("could not get current user directory: %w", err)
 	}
 	userConfigPath := filepath.Join(usr.HomeDir, ".config", "go-arpscan", "config.yaml")
 	if _, err := os.Stat(userConfigPath); err == nil {
@@ -132,7 +132,7 @@ func findProfilesFile(explicitProfilesPath, explicitConfigPath string) (string, 
 		if _, err := os.Stat(explicitProfilesPath); err == nil {
 			return explicitProfilesPath, nil
 		}
-		return "", fmt.Errorf("el fichero de perfiles especificado '%s' no existe", explicitProfilesPath)
+		return "", fmt.Errorf("specified profiles file %q does not exist", explicitProfilesPath)
 	}
 
 	// 2. Directorio de trabajo actual
@@ -153,7 +153,7 @@ func findProfilesFile(explicitProfilesPath, explicitConfigPath string) (string, 
 	// 4. Directorio de configuración del usuario por defecto
 	usr, err := user.Current()
 	if err != nil {
-		return "", fmt.Errorf("no se pudo obtener el directorio del usuario actual: %w", err)
+		return "", fmt.Errorf("could not get current user directory: %w", err)
 	}
 	userProfilesPath := filepath.Join(usr.HomeDir, ".config", "go-arpscan", "profiles.yaml")
 	if _, err := os.Stat(userProfilesPath); err == nil {
@@ -327,14 +327,14 @@ func applyProfile(cmd *cobra.Command, cfg *ResolvedConfig, profile *ProfileConfi
 	if !cmd.Flags().Changed("arpsha") && profile.ArpSHA != "" {
 		resolvedMAC, err := randomizeAndSet(profile.ArpSHA)
 		if err != nil {
-			log.Fatalf("Error al aleatorizar arpsha en el perfil '%s': %v", cfg.ProfileName, err)
+			log.Fatalf("Error randomizing arpsha in profile %q: %v", cfg.ProfileName, err)
 		}
 		cfg.ArpSHA = resolvedMAC
 	}
 	if !cmd.Flags().Changed("srcaddr") && profile.EthSrcMAC != "" {
 		resolvedMAC, err := randomizeAndSet(profile.EthSrcMAC)
 		if err != nil {
-			log.Fatalf("Error al aleatorizar srcaddr en el perfil '%s': %v", cfg.ProfileName, err)
+			log.Fatalf("Error randomizing srcaddr in profile %q: %v", cfg.ProfileName, err)
 		}
 		cfg.EthSrcMAC = resolvedMAC
 	}
@@ -372,7 +372,7 @@ func randomizeMAC(template string) (string, error) {
 	}
 	parts := strings.Split(template, ":")
 	if len(parts) != 6 {
-		return "", fmt.Errorf("plantilla de MAC para aleatorizar inválida: '%s'", template)
+		return "", fmt.Errorf("invalid MAC randomization template: %q", template)
 	}
 	var resultParts []string
 	for _, part := range parts {
@@ -455,4 +455,6 @@ func loadFinalValuesFromFlags(cmd *cobra.Command, cfg *ResolvedConfig) {
 	cfg.VlanID, _ = cmd.Flags().GetInt("vlan")
 	cfg.Snaplen, _ = cmd.Flags().GetInt("snap")
 	cfg.VerboseCount, _ = cmd.Flags().GetCount("verbose")
+	cfg.Fast, _ = cmd.Flags().GetBool("fast")
+	cfg.UpdateVendors, _ = cmd.Flags().GetBool("update-vendors")
 }

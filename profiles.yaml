@@ -16,7 +16,7 @@ profiles:
   # --- Perfiles de Mimetismo (Emulación de Dispositivos Comunes) ---
 
   windows11-workstation:
-    description: "Emula el tráfico ARP de una estación de trabajo con Windows 11 (NIC Intel)."
+    description: "Emulates ARP traffic from a Windows 11 workstation (Intel NIC)."
     arpsha: "3C:FD:FE:00:00:00" # OUI de Intel Corporation
     srcaddr: "3C:FD:FE:00:00:00"
     host-timeout: "1s"
@@ -24,7 +24,7 @@ profiles:
     backoff: 2.0
 
   macos-ventura:
-    description: "Emula el tráfico ARP de un MacBook con macOS Ventura (NIC Broadcom/Apple)."
+    description: "Emulates ARP traffic from a MacBook running macOS Ventura (Broadcom/Apple NIC)."
     arpsha: "F8:4D:89:00:00:00" # OUI de Apple, Inc.
     srcaddr: "F8:4D:89:00:00:00"
     host-timeout: "750ms"
@@ -32,7 +32,7 @@ profiles:
     backoff: 1.5
 
   hp-officejet-printer:
-    description: "Se hace pasar por una impresora HP OfficeJet para pasar desapercibido."
+    description: "Impersonates an HP OfficeJet printer to blend in."
     arpsha: "38:EA:A7:00:00:00" # OUI de Hewlett-Packard
     srcaddr: "38:EA:A7:00:00:00"
     host-timeout: "1.5s"
@@ -43,7 +43,7 @@ profiles:
   # --- Perfiles de Mimetismo de Infraestructura ---
 
   cisco-ios-router:
-    description: "Emula el comportamiento de un router Cisco. Ideal para no levantar sospechas."
+    description: "Emulates Cisco router behavior. Useful for avoiding suspicion."
     arpsha: "00:00:0C:00:00:00" # OUI histórico de Cisco
     srcaddr: "00:00:0C:00:00:00"
     host-timeout: "200ms"
@@ -51,7 +51,7 @@ profiles:
     backoff: 1.2
 
   vmware-esxi-hypervisor:
-    description: "Emula una NIC virtual de un servidor VMWare ESXi."
+    description: "Emulates a virtual NIC from a VMware ESXi server."
     arpsha: "00:0C:29:00:00:00" # OUI de VMware, Inc.
     srcaddr: "00:0C:29:00:00:00"
     host-timeout: "300ms"
@@ -59,7 +59,7 @@ profiles:
     backoff: 1.5
 
   android-phone-google-pixel:
-    description: "Se mimetiza con un teléfono Google Pixel, común en redes Wi-Fi corporativas."
+    description: "Blends in as a Google Pixel phone, common on corporate Wi-Fi networks."
     arpsha: "D8:3A:DD:00:00:00" # OUI de Google, Inc.
     srcaddr: "D8:3A:DD:00:00:00"
     host-timeout: "900ms"
@@ -69,14 +69,14 @@ profiles:
   # --- Perfiles Tácticos (Estrategias de Escaneo y Evasión) ---
 
   stealth-scan-generic:
-    description: "Escaneo lento y de bajo perfil para evadir la detección por sistemas de monitoreo básicos."
+    description: "Slow, low-profile scan to evade detection by basic monitoring systems."
     retry: 1
     host-timeout: "2s"
     bandwidth: "64k"
     random: true
 
   ids-stress-test:
-    description: "Escaneo agresivo para probar las alertas de IDS/IPS sobre tormentas de ARP."
+    description: "Aggressive scan to test IDS/IPS alerts for ARP storms."
     retry: 4
     host-timeout: "100ms"
     backoff: 1.2
@@ -85,13 +85,13 @@ profiles:
     padding: "41414141"
 
   decoy-unsolicited-reply:
-    description: "Técnica de evasión. Anuncia nuestra presencia vía ARP Reply sin haber recibido un Request."
+    description: "Evasion technique. Announces our presence with an ARP Reply without receiving a Request."
     arpop: 2
     retry: 1
     bandwidth: "128k"
 
   resolve-and-confirm:
-    description: "Perfil de alta fiabilidad para resolver una única IP. No es sigiloso, es certero."
+    description: "High-reliability profile for resolving a single IP. Not stealthy, but accurate."
     retry: 5
     host-timeout: "250ms"
     backoff: 2.0
@@ -100,13 +100,13 @@ profiles:
   # --- Perfiles para Validación de Defensas y Diagnóstico Operacional ---
 
   gateway-impersonation-test:
-    description: "Prueba si los sistemas de seguridad (DAI) detectan un intento de suplantación del gateway."
+    description: "Tests whether security systems (DAI) detect a gateway impersonation attempt."
     arpop: 2
     retry: 1
     bandwidth: "256k"
 
   malformed-packet-fuzz:
-    description: "Envía paquetes ARP deliberadamente malformados para probar la resiliencia de los stacks de red y las reglas de un IDS."
+    description: "Sends deliberately malformed ARP packets to test network stack resilience and IDS rules."
     arphrd: 1
     arppro: "0x0800"
     arphln: 8
@@ -114,7 +114,7 @@ profiles:
     padding: "DEADBEEFCAFE"
 
   rogue-server-announcement:
-    description: "Emula un servidor no autorizado anunciando su presencia para probar las políticas de control de red."
+    description: "Emulates an unauthorized server announcing its presence to test network control policies."
     arpop: 2
     arpsha: "14:18:77:00:00:00"
     srcaddr: "14:18:77:00:00:00"
@@ -122,14 +122,14 @@ profiles:
     interval: "1s"
 
   nac-preflight-check:
-    description: "Verificación de alta fiabilidad para confirmar si una IP está realmente libre antes de provisionar un dispositivo."
+    description: "High-reliability check to confirm whether an IP is truly free before provisioning a device."
     retry: 5
     host-timeout: "100ms"
     backoff: 1.2
     bandwidth: "10M"
 
   rapid-subnet-inventory:
-    description: "Optimizado para inventariar subredes de forma rápida y completa. Ideal para obtener una visión general inicial."
+    description: "Optimized for fast and complete subnet inventory. Ideal for an initial overview."
     retry: 2
     host-timeout: "300ms"
     bandwidth: "8M"
@@ -140,7 +140,7 @@ profiles:
   # --- Perfiles para Sondeo y Explotación de VLANs ---
 
   vlan-discovery-optimized:
-    description: "Perfil optimizado para ser usado en un bucle de escaneo de VLANs (VLAN Sweeping). Silencioso y rápido."
+    description: "Profile optimized for VLAN sweeping loops. Quiet and fast."
     retry: 1
     host-timeout: "250ms"
     quiet: true
@@ -152,26 +152,26 @@ profiles:
     # done
 
   double-tagging-hop-probe:
-    description: "Intenta un ataque de VLAN Hopping por doble etiquetado (Double Tagging) contra la VLAN 1 (nativa común)."
+    description: "Attempts a double-tagging VLAN hopping attack against VLAN 1 (common native VLAN)."
     vlan: 1
     retry: 2
     host-timeout: "500ms"
 
   native-vlan-recon:
-    description: "Realiza un inventario de la VLAN nativa (tráfico no etiquetado)."
+    description: "Inventories the native VLAN (untagged traffic)."
     vlan: 0
     progress: true
     rtt: true
     bandwidth: "5M"
 
   voip-vlan-scan:
-    description: "Busca dispositivos en una VLAN común para Voz sobre IP (VoIP), a menudo un objetivo de alto valor (ID 100)."
+    description: "Looks for devices on a common Voice over IP (VoIP) VLAN, often a high-value target (ID 100)."
     vlan: 100
     progress: true
     rtt: true
 
   guest-wifi-escape-probe:
-    description: "Prueba de 'fuga' de VLAN desde una red de invitados hacia una VLAN corporativa sensible (ID 10)."
+    description: "Tests VLAN escape from a guest network toward a sensitive corporate VLAN (ID 10)."
     vlan: 10
     retry: 3
     host-timeout: "750ms"

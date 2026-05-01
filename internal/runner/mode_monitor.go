@@ -39,11 +39,11 @@ type monitorHostInfo struct {
 
 // <<< INICIO: CONSTANTES Y STRUCT DE EVENTOS MEJORADAS >>>
 const (
-	EventNewHost             = "NEW_HOST"
-	EventHostReturned        = "HOST_RETURNED"
-	EventHostInactive        = "HOST_INACTIVE"
-	EventIPConflict          = "IP_CONFLICT"
-	EventHostRemoved         = "HOST_REMOVED"
+	EventNewHost              = "NEW_HOST"
+	EventHostReturned         = "HOST_RETURNED"
+	EventHostInactive         = "HOST_INACTIVE"
+	EventIPConflict           = "IP_CONFLICT"
+	EventHostRemoved          = "HOST_REMOVED"
 	EventGatewaySpoofDetected = "GATEWAY_SPOOF_DETECTED"
 )
 
@@ -70,7 +70,7 @@ func (r *Runner) dispatchEvent(event MonitorEvent) {
 	// 2. Serializar a JSON y mostrar en la salida estándar
 	jsonData, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("Error al serializar el evento del monitor a JSON: %v", err)
+		log.Printf("Error serializing monitor event to JSON: %v", err)
 		return
 	}
 	fmt.Println(string(jsonData))
@@ -88,7 +88,7 @@ func (r *Runner) sendWebhook(payload []byte) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.WebhookURL, bytes.NewBuffer(payload))
 	if err != nil {
-		log.Printf("ADVERTENCIA (Webhook): Error creando la petición: %v", err)
+		log.Printf("WARNING (Webhook): Error creating request: %v", err)
 		return
 	}
 
@@ -102,26 +102,26 @@ func (r *Runner) sendWebhook(payload []byte) {
 			value := strings.TrimSpace(parts[1])
 			req.Header.Set(key, value)
 		} else {
-			log.Printf("ADVERTENCIA (Webhook): Ignorando cabecera mal formada: %s", h)
+			log.Printf("WARNING (Webhook): Ignoring malformed header: %s", h)
 		}
 	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("ADVERTENCIA (Webhook): Error enviando la petición a %s: %v", r.cfg.WebhookURL, err)
+		log.Printf("WARNING (Webhook): Error sending request to %s: %v", r.cfg.WebhookURL, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("ADVERTENCIA (Webhook): Respuesta no exitosa (código %d) de %s", resp.StatusCode, r.cfg.WebhookURL)
+		log.Printf("WARNING (Webhook): Non-success response (status %d) from %s", resp.StatusCode, r.cfg.WebhookURL)
 	}
 }
 
 // runMonitorMode es el punto de entrada para la lógica de monitorización continua.
 func (r *Runner) runMonitorMode() error {
-	log.Printf("Iniciando modo monitor en la interfaz %s. Presione Ctrl+C para salir.", r.scanConfig.Interface.Name)
+	log.Printf("Starting monitor mode on interface %s. Press Ctrl+C to exit.", r.scanConfig.Interface.Name)
 	knownHosts := make(map[string]*monitorHostInfo) // Usamos punteros para poder modificar in-place.
 	arpPackets := make(chan *layers.ARP)
 
@@ -138,7 +138,7 @@ func (r *Runner) runMonitorMode() error {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigs
-		log.Println("\nSeñal de interrupción recibida. Finalizando el modo monitor...")
+		log.Println("\nInterrupt signal received. Stopping monitor mode...")
 		cancel()
 	}()
 
@@ -146,7 +146,7 @@ func (r *Runner) runMonitorMode() error {
 	go r.passiveARPListener(ctx, arpPackets)
 
 	// Realizar un escaneo inicial para establecer la línea base
-	log.Println("Realizando escaneo inicial para establecer la línea base de la red...")
+	log.Println("Running initial scan to establish network baseline...")
 	initialScan := r.runScanAndCollect()
 	for _, result := range initialScan.Results {
 		info := &monitorHostInfo{
@@ -166,16 +166,16 @@ func (r *Runner) runMonitorMode() error {
 			var err error
 			monitoredGatewayMAC, err = net.ParseMAC(gwInfo.MAC)
 			if err != nil {
-				log.Fatalf("Error crítico: no se pudo parsear la MAC del gateway '%s' durante la inicialización.", gwInfo.MAC)
+				log.Fatalf("Critical error: could not parse gateway MAC %q during initialization.", gwInfo.MAC)
 			}
-			log.Printf("Protección de suplantación ARP activada para el gateway %s -> %s", monitoredGatewayIP, monitoredGatewayMAC)
+			log.Printf("ARP spoofing protection enabled for gateway %s -> %s", monitoredGatewayIP, monitoredGatewayMAC)
 		} else {
-			log.Fatalf("Error crítico: El gateway especificado %s no fue encontrado en el escaneo inicial. No se puede activar la protección.", r.cfg.MonitorGatewayIP)
+			log.Fatalf("Critical error: specified gateway %s was not found in the initial scan. Protection cannot be enabled.", r.cfg.MonitorGatewayIP)
 		}
 	}
 	// <<< FIN: LÓGICA DE LÍNEA BASE PARA EL GATEWAY >>>
 
-	log.Printf("Línea base establecida. %d hosts activos detectados. Iniciando monitorización continua.", len(knownHosts))
+	log.Printf("Baseline established. %d active hosts detected. Starting continuous monitoring.", len(knownHosts))
 
 	ticker := time.NewTicker(r.cfg.MonitorInterval)
 	defer ticker.Stop()
@@ -201,7 +201,7 @@ func (r *Runner) runMonitorMode() error {
 					IP:            srcIPStr,
 					MAC:           srcMACStr, // MAC del paquete, que es la del atacante
 					Vendor:        attackerVendor,
-					Notes:         "Se detectó un anuncio ARP pasivo para el gateway desde una MAC no autorizada.",
+					Notes:         "Detected passive ARP announcement for the gateway from an unauthorized MAC.",
 					LegitimateMAC: monitoredGatewayMAC.String(),
 					AttackerMAC:   srcMACStr,
 				})
@@ -221,12 +221,12 @@ func (r *Runner) runMonitorMode() error {
 						IP:     srcIPStr,
 						MAC:    knownInfo.MAC,
 						Vendor: knownInfo.Vendor,
-						Notes:  fmt.Sprintf("La MAC cambió de %s a %s (visto pasivamente).", oldMAC, srcMACStr),
+						Notes:  fmt.Sprintf("MAC changed from %s to %s (seen passively).", oldMAC, srcMACStr),
 					})
 				}
 				if knownInfo.State == HostStateInactive {
 					knownInfo.State = HostStateActive
-					r.dispatchEvent(MonitorEvent{Event: EventHostReturned, IP: srcIPStr, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Visto pasivamente."})
+					r.dispatchEvent(MonitorEvent{Event: EventHostReturned, IP: srcIPStr, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Seen passively."})
 				}
 			} else {
 				// El host es completamente nuevo.
@@ -237,11 +237,11 @@ func (r *Runner) runMonitorMode() error {
 					LastSeen: time.Now(),
 				}
 				knownHosts[srcIPStr] = info
-				r.dispatchEvent(MonitorEvent{Event: EventNewHost, IP: srcIPStr, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado pasivamente."})
+				r.dispatchEvent(MonitorEvent{Event: EventNewHost, IP: srcIPStr, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detected passively."})
 			}
 
 		case <-ticker.C:
-			log.Printf("Iniciando sondeo activo periódico (intervalo: %v)...", r.cfg.MonitorInterval)
+			log.Printf("Starting periodic active probe (interval: %v)...", r.cfg.MonitorInterval)
 			activeScan := r.runScanAndCollect()
 			currentScanHosts := make(map[string]scanner.ScanResult)
 			for _, result := range activeScan.Results {
@@ -260,7 +260,7 @@ func (r *Runner) runMonitorMode() error {
 							IP:            ip,
 							MAC:           newInfo.MAC,
 							Vendor:        attackerVendor,
-							Notes:         "Se detectó una respuesta ARP del gateway desde una MAC no autorizada durante el sondeo activo.",
+							Notes:         "Detected gateway ARP reply from an unauthorized MAC during active probing.",
 							LegitimateMAC: monitoredGatewayMAC.String(),
 							AttackerMAC:   newInfo.MAC,
 						})
@@ -278,17 +278,17 @@ func (r *Runner) runMonitorMode() error {
 							IP:     ip,
 							MAC:    newInfo.MAC,
 							Vendor: newInfo.Vendor,
-							Notes:  fmt.Sprintf("La MAC cambió de %s a %s (detectado en sondeo activo).", oldMAC, newInfo.MAC),
+							Notes:  fmt.Sprintf("MAC changed from %s to %s (detected during active probing).", oldMAC, newInfo.MAC),
 						})
 					}
 					if knownInfo.State == HostStateInactive {
 						knownInfo.State = HostStateActive
-						r.dispatchEvent(MonitorEvent{Event: EventHostReturned, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Respondió al sondeo activo."})
+						r.dispatchEvent(MonitorEvent{Event: EventHostReturned, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Responded to active probe."})
 					}
 				} else { // No respondió
 					if knownInfo.State == HostStateActive {
 						knownInfo.State = HostStateInactive
-						r.dispatchEvent(MonitorEvent{Event: EventHostInactive, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "No respondió al sondeo activo."})
+						r.dispatchEvent(MonitorEvent{Event: EventHostInactive, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: "Did not respond to active probe."})
 					}
 				}
 			}
@@ -296,7 +296,7 @@ func (r *Runner) runMonitorMode() error {
 			// Purgar hosts que han estado inactivos demasiado tiempo
 			for ip, knownInfo := range knownHosts {
 				if knownInfo.State == HostStateInactive && time.Since(knownInfo.LastSeen) > r.cfg.MonitorRemovalThreshold {
-					r.dispatchEvent(MonitorEvent{Event: EventHostRemoved, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: fmt.Sprintf("Inactivo durante más de %v.", r.cfg.MonitorRemovalThreshold)})
+					r.dispatchEvent(MonitorEvent{Event: EventHostRemoved, IP: ip, MAC: knownInfo.MAC, Vendor: knownInfo.Vendor, Notes: fmt.Sprintf("Inactive for more than %v.", r.cfg.MonitorRemovalThreshold)})
 					delete(knownHosts, ip)
 				}
 			}
@@ -311,10 +311,10 @@ func (r *Runner) runMonitorMode() error {
 						LastSeen: time.Now(),
 					}
 					knownHosts[ip] = info
-					r.dispatchEvent(MonitorEvent{Event: EventNewHost, IP: ip, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detectado en sondeo activo."})
+					r.dispatchEvent(MonitorEvent{Event: EventNewHost, IP: ip, MAC: info.MAC, Vendor: info.Vendor, Notes: "Detected during active probe."})
 				}
 			}
-			log.Println("Sondeo activo completado.")
+			log.Println("Active probe completed.")
 		}
 	}
 }
@@ -323,13 +323,13 @@ func (r *Runner) runMonitorMode() error {
 func (r *Runner) passiveARPListener(ctx context.Context, arpChannel chan<- *layers.ARP) {
 	handle, err := pcap.OpenLive(r.scanConfig.Interface.Name, 1, true, pcap.BlockForever)
 	if err != nil {
-		log.Printf("Error crítico en listener pasivo: no se pudo abrir pcap: %v", err)
+		log.Printf("Critical error in passive listener: could not open pcap: %v", err)
 		return
 	}
 	defer handle.Close()
 
 	if err := handle.SetBPFFilter("arp"); err != nil {
-		log.Printf("Error crítico en listener pasivo: no se pudo establecer filtro BPF: %v", err)
+		log.Printf("Critical error in passive listener: could not set BPF filter: %v", err)
 		return
 	}
 

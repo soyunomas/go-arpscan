@@ -22,8 +22,10 @@ import (
 )
 
 const effectivePacketBits = 672
+const ieeeOUIURL = "https://standards-oui.ieee.org/oui/oui.txt"
+const ieeeIABURL = "https://standards-oui.ieee.org/iab/iab.txt"
 
-var errNoTargets = errors.New("no se especificaron objetivos de escaneo")
+var errNoTargets = errors.New("no scan targets specified")
 
 // buildScannerConfig construye el objeto scanner.Config a partir de la configuración resuelta.
 func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Config, error) {
@@ -35,15 +37,15 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	if cfg.IfaceName != "" {
 		iface, localnetCIDR, err = network.GetInterfaceByName(cfg.IfaceName)
 		if err != nil {
-			return nil, fmt.Errorf("error al obtener la interfaz especificada: %w", err)
+			return nil, fmt.Errorf("error getting specified interface: %w", err)
 		}
 	} else {
 		iface, localnetCIDR, err = network.GetDefaultInterface()
 		if err != nil {
-			return nil, fmt.Errorf("no se pudo auto-detectar la interfaz, por favor especifique una con -i: %w", err)
+			return nil, fmt.Errorf("could not auto-detect interface, please specify one with -I: %w", err)
 		}
 		if cfg.VerboseCount > 0 {
-			log.Printf("Interfaz no especificada. Usando interfaz auto-detectada: %s", iface.Name)
+			log.Printf("No interface specified. Using auto-detected interface: %s", iface.Name)
 		}
 	}
 
@@ -51,10 +53,10 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	var targets []string
 	if cfg.UseLocalnet {
 		if localnetCIDR == nil {
-			return nil, fmt.Errorf("no se pudo determinar la red local de %s para usar con --localnet", iface.Name)
+			return nil, fmt.Errorf("could not determine local network for %s to use with --localnet", iface.Name)
 		}
 		if cfg.VerboseCount >= 1 {
-			log.Printf("Añadiendo red local de la interfaz %s a los objetivos: %s", iface.Name, localnetCIDR.String())
+			log.Printf("Adding local network for interface %s to targets: %s", iface.Name, localnetCIDR.String())
 		}
 		targets = append(targets, localnetCIDR.String())
 	}
@@ -65,7 +67,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		} else {
 			f, err = os.Open(cfg.FilePath)
 			if err != nil {
-				return nil, fmt.Errorf("error abriendo el archivo de targets: %w", err)
+				return nil, fmt.Errorf("error opening targets file: %w", err)
 			}
 			defer f.Close()
 		}
@@ -82,7 +84,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	ips, err := network.ResolveTargets(targets, cfg.Numeric)
 	if err != nil {
 		if len(targets) > 0 {
-			return nil, fmt.Errorf("error resolviendo targets: %w", err)
+			return nil, fmt.Errorf("error resolving targets: %w", err)
 		}
 	}
 
@@ -94,7 +96,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		if cfg.ExcludeFilePath != "" {
 			file, err := os.Open(cfg.ExcludeFilePath)
 			if err != nil {
-				return nil, fmt.Errorf("error abriendo el archivo de exclusión '%s': %w", cfg.ExcludeFilePath, err)
+				return nil, fmt.Errorf("error opening exclusion file %q: %w", cfg.ExcludeFilePath, err)
 			}
 			defer file.Close()
 
@@ -106,7 +108,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 				}
 			}
 			if err := scanner.Err(); err != nil {
-				return nil, fmt.Errorf("error leyendo el archivo de exclusión '%s': %w", cfg.ExcludeFilePath, err)
+				return nil, fmt.Errorf("error reading exclusion file %q: %w", cfg.ExcludeFilePath, err)
 			}
 		}
 
@@ -123,7 +125,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 					excludedIPs[ip.String()] = struct{}{}
 					continue
 				}
-				log.Printf("Advertencia: formato de exclusión no válido, ignorando: '%s'", exclusion)
+				log.Printf("Warning: invalid exclusion format, ignoring: %q", exclusion)
 			}
 
 			if len(excludedIPs) > 0 || len(excludedNets) > 0 {
@@ -164,15 +166,15 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	}
 
 	// --- Vendors ---
-	if err := oui.EnsureFile(cfg.OUIFilePath, "https://standards-oui.ieee.org/oui/oui.txt", "OUI"); err != nil {
-		log.Printf("Advertencia: Falló la gestión del archivo OUI: %v.", err)
+	if err := oui.EnsureFile(cfg.OUIFilePath, ieeeOUIURL, "OUI"); err != nil {
+		log.Printf("Warning: OUI file management failed: %v.", err)
 	}
-	if err := oui.EnsureFile(cfg.IABFilePath, "https://standards-oui.ieee.org/iab/iab.txt", "IAB"); err != nil {
-		log.Printf("Advertencia: Falló la gestión del archivo IAB: %v.", err)
+	if err := oui.EnsureFile(cfg.IABFilePath, ieeeIABURL, "IAB"); err != nil {
+		log.Printf("Warning: IAB file management failed: %v.", err)
 	}
 	vendorDB, err := oui.NewVendorDB(cfg.OUIFilePath, cfg.IABFilePath, cfg.MACFilePath, cfg.VerboseCount)
 	if err != nil {
-		return nil, fmt.Errorf("error cargando la base de datos de vendedores: %w", err)
+		return nil, fmt.Errorf("error loading vendor database: %w", err)
 	}
 
 	// --- Configuración de Tiempos y Ancho de Banda ---
@@ -184,12 +186,12 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	if cfg.Bandwidth == "" && interval == 1*time.Millisecond {
 		interval = 800 * time.Microsecond
 		if cfg.VerboseCount > 0 {
-			log.Println("Optimizando intervalo a 800µs (Modo Balanceado).")
+			log.Println("Optimizing interval to 800µs (Balanced Mode).")
 		}
 	} else if cfg.Bandwidth != "" {
 		bitsPerSecond, err := cli.ParseBandwidth(cfg.Bandwidth)
 		if err != nil {
-			return nil, fmt.Errorf("ancho de banda inválido: %w", err)
+			return nil, fmt.Errorf("invalid bandwidth: %w", err)
 		}
 		if bitsPerSecond > 0 {
 			interval = time.Duration(float64(effectivePacketBits) / float64(bitsPerSecond) * float64(time.Second))
@@ -219,7 +221,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		scanTimeout = calculatedTimeout
 
 		if cfg.VerboseCount > 0 && len(ips) > 0 {
-			log.Printf("Timeout global calculado: %v", scanTimeout)
+			log.Printf("Calculated global timeout: %v", scanTimeout)
 		}
 	}
 
@@ -232,7 +234,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		} else {
 			finalArpSPA = net.ParseIP(cfg.ArpSPA)
 			if finalArpSPA == nil || finalArpSPA.To4() == nil {
-				return nil, fmt.Errorf("IP de origen --arpspa inválida: %s", cfg.ArpSPA)
+				return nil, fmt.Errorf("invalid --arpspa source IP: %s", cfg.ArpSPA)
 			}
 		}
 	}
@@ -241,32 +243,32 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	if cfg.ArpSHA != "" {
 		finalArpSHA, err = net.ParseMAC(cfg.ArpSHA)
 		if err != nil {
-			return nil, fmt.Errorf("MAC de origen --arpsha inválida: %w", err)
+			return nil, fmt.Errorf("invalid --arpsha source MAC: %w", err)
 		}
 	}
 	if cfg.EthSrcMAC != "" {
 		finalEthSrcMAC, err = net.ParseMAC(cfg.EthSrcMAC)
 		if err != nil {
-			return nil, fmt.Errorf("MAC de origen Ethernet --srcaddr inválida: %w", err)
+			return nil, fmt.Errorf("invalid --srcaddr Ethernet source MAC: %w", err)
 		}
 	}
 	if cfg.EthDstMAC != "" {
 		finalEthDstMAC, err = net.ParseMAC(cfg.EthDstMAC)
 		if err != nil {
-			return nil, fmt.Errorf("MAC de destino Ethernet --destaddr inválida: %w", err)
+			return nil, fmt.Errorf("invalid --destaddr Ethernet destination MAC: %w", err)
 		}
 	}
 	if cfg.ArpTHA != "" {
 		finalArpTHA, err = net.ParseMAC(cfg.ArpTHA)
 		if err != nil {
-			return nil, fmt.Errorf("MAC de destino ARP --arptha inválida: %w", err)
+			return nil, fmt.Errorf("invalid --arptha ARP destination MAC: %w", err)
 		}
 	}
 
 	parseHex16 := func(hexStr, flagName string) (uint16, error) {
 		val, err := strconv.ParseUint(strings.TrimPrefix(hexStr, "0x"), 16, 16)
 		if err != nil {
-			return 0, fmt.Errorf("valor de --%s inválido: %s. Debe ser un número de 16-bit: %w", flagName, hexStr, err)
+			return 0, fmt.Errorf("invalid --%s value: %s. Must be a 16-bit number: %w", flagName, hexStr, err)
 		}
 		return uint16(val), nil
 	}
@@ -284,7 +286,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	if cfg.PaddingHex != "" {
 		finalPaddingData, err = hex.DecodeString(cfg.PaddingHex)
 		if err != nil {
-			return nil, fmt.Errorf("valor de --padding inválido, debe ser hexadecimal: %w", err)
+			return nil, fmt.Errorf("invalid --padding value, must be hexadecimal: %w", err)
 		}
 	}
 
@@ -316,6 +318,8 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		PcapSaveFile:      cfg.PcapSaveFile,
 		VlanID:            uint16(cfg.VlanID),
 		Snaplen:           cfg.Snaplen,
+		Fast:              cfg.Fast,
+		RandomSeed:        cfg.RandomSeed,
 	}
 
 	return scannerConfig, nil

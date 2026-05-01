@@ -17,6 +17,10 @@ type Runner struct {
 
 // New crea una nueva instancia de Runner, validando la configuración inicial.
 func New(cfg *config.ResolvedConfig, args []string) (*Runner, error) {
+	if cfg.UpdateVendors {
+		return &Runner{cfg: cfg, args: args}, nil
+	}
+
 	// En modos exclusivos, no necesitamos la configuración completa del scanner, pero sí la interfaz.
 	// buildScannerConfig se encarga de resolver la interfaz correctamente.
 	scanCfg, err := buildScannerConfig(cfg, args)
@@ -24,7 +28,7 @@ func New(cfg *config.ResolvedConfig, args []string) (*Runner, error) {
 		// Ignoramos el error de "no se especificaron objetivos" si estamos en un modo exclusivo.
 		isExclusiveMode := cfg.SpoofTargetIP != "" || cfg.MonitorMode || cfg.DetectPromiscTargetIP != ""
 		if !isExclusiveMode || !errors.Is(err, errNoTargets) {
-			return nil, fmt.Errorf("fallo al construir la configuración de la aplicación: %w", err)
+			return nil, fmt.Errorf("failed to build application configuration: %w", err)
 		}
 	}
 
@@ -38,6 +42,8 @@ func New(cfg *config.ResolvedConfig, args []string) (*Runner, error) {
 // Run ejecuta el flujo principal de la aplicación, delegando al modo de operación correcto.
 func (r *Runner) Run() error {
 	switch {
+	case r.cfg.UpdateVendors:
+		return r.runUpdateVendorsMode()
 	case r.cfg.SpoofTargetIP != "":
 		return r.runSpoofMode()
 	case r.cfg.DetectPromiscTargetIP != "":

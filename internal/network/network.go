@@ -27,7 +27,7 @@ func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 				ipNet := &net.IPNet{IP: netIP.Mask(mask), Mask: mask}
 				ips, err := GetIPs(ipNet)
 				if err != nil {
-					return nil, fmt.Errorf("error generando IPs para %s: %w", target, err)
+					return nil, fmt.Errorf("error generating IPs for %s: %w", target, err)
 				}
 				for _, ip := range ips {
 					ipMap[ip.String()] = struct{}{}
@@ -40,16 +40,16 @@ func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 		if strings.Contains(target, "-") {
 			parts := strings.Split(target, "-")
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("rango de IP mal formado: %s", target)
+				return nil, fmt.Errorf("malformed IP range: %s", target)
 			}
 			startIP := net.ParseIP(parts[0])
 			endIP := net.ParseIP(parts[1])
 			if startIP == nil || endIP == nil {
-				return nil, fmt.Errorf("IP inválida en el rango: %s", target)
+				return nil, fmt.Errorf("invalid IP in range: %s", target)
 			}
 
 			if bytes.Compare(startIP, endIP) > 0 {
-				return nil, fmt.Errorf("la IP de inicio del rango es mayor que la de fin: %s", target)
+				return nil, fmt.Errorf("range start IP is greater than end IP: %s", target)
 			}
 
 			for ip := startIP; bytes.Compare(ip, endIP) <= 0; inc(ip) {
@@ -65,7 +65,7 @@ func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 		if err == nil {
 			ips, err := GetIPs(ipNet)
 			if err != nil {
-				return nil, fmt.Errorf("error generando IPs para el CIDR %s: %w", target, err)
+				return nil, fmt.Errorf("error generating IPs for CIDR %s: %w", target, err)
 			}
 			for _, ip := range ips {
 				ipMap[ip.String()] = struct{}{}
@@ -99,7 +99,7 @@ func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 		}
 
 		// Si llegamos aquí, no pudimos interpretar el target
-		return nil, fmt.Errorf("formato de target no reconocido o no se pudo resolver: %s", target)
+		return nil, fmt.Errorf("unrecognized target format or could not resolve: %s", target)
 	}
 
 	var result []net.IP
@@ -134,12 +134,12 @@ func inc(ip net.IP) {
 func GetInterfaceByName(name string) (*net.Interface, *net.IPNet, error) {
 	iface, err := net.InterfaceByName(name)
 	if err != nil {
-		return nil, nil, fmt.Errorf("no se pudo encontrar la interfaz '%s': %w", name, err)
+		return nil, nil, fmt.Errorf("could not find interface %q: %w", name, err)
 	}
 
 	addrs, err := iface.Addrs()
 	if err != nil {
-		return nil, nil, fmt.Errorf("no se pudieron obtener las direcciones de la interfaz '%s': %w", name, err)
+		return nil, nil, fmt.Errorf("could not get addresses for interface %q: %w", name, err)
 	}
 
 	for _, addr := range addrs {
@@ -147,14 +147,14 @@ func GetInterfaceByName(name string) (*net.Interface, *net.IPNet, error) {
 			return iface, ipnet, nil
 		}
 	}
-	return nil, nil, errors.New("no se encontró una dirección IPv4 válida en la interfaz")
+	return nil, nil, errors.New("no valid IPv4 address found on interface")
 }
 
 // GetDefaultInterface intenta encontrar la mejor interfaz de red para usar por defecto.
 func GetDefaultInterface() (*net.Interface, *net.IPNet, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return nil, nil, fmt.Errorf("no se pudieron listar las interfaces de red: %w", err)
+		return nil, nil, fmt.Errorf("could not list network interfaces: %w", err)
 	}
 
 	for _, iface := range ifaces {
@@ -180,5 +180,5 @@ func GetDefaultInterface() (*net.Interface, *net.IPNet, error) {
 		}
 	}
 
-	return nil, nil, errors.New("no se pudo encontrar una interfaz de red activa y válida con una dirección IPv4")
+	return nil, nil, errors.New("could not find an active valid network interface with an IPv4 address")
 }

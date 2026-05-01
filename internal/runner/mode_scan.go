@@ -14,6 +14,25 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
+// startScannerEngine elige entre el motor "fast" (AF_PACKET zero-alloc, Linux)
+// y el motor original (gopacket/pcap). Si Fast está activado pero la
+// configuración no es soportable (vlan, llc, overrides…), cae al motor
+// original con un aviso. *[Regla 75: Fast-Path vs Slow-Path]*.
+func startScannerEngine(scanCfg *scanner.Config, verbosity int) (<-chan scanner.ScanResult, error) {
+	if scanCfg.Fast {
+		if scanner.FastEligible(scanCfg) {
+			if verbosity >= 1 {
+				log.Println("Active engine: FAST (AF_PACKET zero-alloc).")
+			}
+			return scanner.StartFastScan(scanCfg)
+		}
+		if verbosity >= 0 {
+			log.Println("Warning: --fast is not compatible with the current configuration; using standard engine.")
+		}
+	}
+	return scanner.StartScan(scanCfg)
+}
+
 // AnalyzedResults contiene los resultados del escaneo junto con los resúmenes de análisis.
 type AnalyzedResults struct {
 	Results           []scanner.ScanResult
@@ -38,8 +57,8 @@ func (r *Runner) runScanMode() error {
 
 	if shouldBufferResults {
 		if !isScriptingOutput(r.cfg) && r.cfg.StateFilePath == "" {
-			log.Printf("Iniciando escaneo en la interfaz %s (%s)", r.scanConfig.Interface.Name, r.scanConfig.Interface.HardwareAddr)
-			log.Printf("Objetivos a escanear: %d IPs", len(r.scanConfig.IPs))
+			log.Printf("Starting scan on interface %s (%s)", r.scanConfig.Interface.Name, r.scanConfig.Interface.HardwareAddr)
+			log.Printf("Targets to scan: %d IPs", len(r.scanConfig.IPs))
 		}
 
 		allResults := r.runScanAndCollect()
@@ -47,7 +66,7 @@ func (r *Runner) runScanMode() error {
 		if r.cfg.StateFilePath != "" {
 			if err := r.saveStateToFile(allResults, r.cfg.StateFilePath); err != nil {
 				// Es una advertencia, no un error fatal, para no interrumpir otros flujos.
-				log.Printf("Advertencia: no se pudo guardar el fichero de estado: %v", err)
+				log.Printf("Warning: could not save state file: %v", err)
 			}
 			if !r.cfg.ShowProgress && !isScriptingOutput(r.cfg) {
 				return nil // Si solo queríamos guardar, hemos terminado.
@@ -78,7 +97,7 @@ func (r *Runner) runScanMode() error {
 	}
 
 	if !isScriptingOutput(r.cfg) && r.cfg.StateFilePath == "" && !r.cfg.DiffMode {
-		log.Println("Escaneo completado.")
+		log.Println("Scan completed.")
 	}
 	return nil
 }
@@ -91,9 +110,9 @@ func (r *Runner) runScanAndPrintRealTime() {
 		f = formatter.NewDefaultFormatter(r.cfg.ShowRTT)
 	}
 
-	resultsChan, err := scanner.StartScan(r.scanConfig)
+	resultsChan, err := startScannerEngine(r.scanConfig, r.cfg.VerboseCount)
 	if err != nil {
-		log.Fatalf("Error iniciando el escaneo: %v", err)
+		log.Fatalf("Error starting scan: %v", err)
 	}
 
 	f.PrintHeader()
@@ -116,9 +135,9 @@ func (r *Runner) runScanAndCollect() *AnalyzedResults {
 		r.scanConfig.ProgressBar = bar
 	}
 
-	resultsChan, err := scanner.StartScan(r.scanConfig)
+	resultsChan, err := startScannerEngine(r.scanConfig, r.cfg.VerboseCount)
 	if err != nil {
-		log.Fatalf("Error iniciando el escaneo: %v", err)
+		log.Fatalf("Error starting scan: %v", err)
 	}
 
 	var allResults []scanner.ScanResult
@@ -151,22 +170,22 @@ func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verb
 			if previousMAC != result.MAC {
 				// Conflicto de IP: Misma IP, diferente MAC.
 				result.Status = "(CONFLICT)"
-				summary := fmt.Sprintf("%s está en uso por %s y %s", result.IP, previousMAC, result.MAC)
+				summary := fmt.Sprintf("%s is in use by %s and %s", result.IP, previousMAC, result.MAC)
 				conflictSummaries = append(conflictSummaries, summary)
 			} else {
 				// Duplicado Exacto: Misma IP, misma MAC.
 				if ignoreDups {
 					if verboseCount >= 1 {
-						log.Printf("Respuesta duplicada para %s (%s) ignorada.", result.IP, result.MAC)
+						log.Printf("Duplicate response for %s (%s) ignored.", result.IP, result.MAC)
 					}
 					continue // Saltamos el callback y el resto de lógica
 				}
 				result.Status = "(DUPLICATE)"
-				
+
 				// IMPORTANTE: Si es un duplicado exacto, NO seguimos comprobando Multi-IP.
 				// Simplemente imprimimos que es un duplicado y pasamos al siguiente.
 				resultCallback(result)
-				continue 
+				continue
 			}
 		} else {
 			// Caso B: Primera vez que vemos esta IP.
@@ -175,10 +194,10 @@ func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verb
 
 		// 2. Detección de Multi-IP (Una MAC tiene varias IPs)
 		// Solo llegamos aquí si NO es un duplicado exacto (o es la primera vez, o es un conflicto).
-		
+
 		ipsForMAC := seenMACs[result.MAC]
 		isNewIPForThisMAC := true
-		
+
 		// Verificamos si esta IP ya estaba registrada para esta MAC
 		for _, seenIP := range ipsForMAC {
 			if seenIP == result.IP {
@@ -189,7 +208,7 @@ func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verb
 
 		if isNewIPForThisMAC {
 			seenMACs[result.MAC] = append(ipsForMAC, result.IP)
-			
+
 			// Si esta MAC ya tiene más de una IP asociada, y el status actual está limpio,
 			// marcamos como Multi-IP.
 			if len(seenMACs[result.MAC]) > 1 && result.Status == "" {
@@ -203,7 +222,7 @@ func processResults(resultsChan <-chan scanner.ScanResult, ignoreDups bool, verb
 	var multiIPSummaries []string
 	for mac, seenIPsForMac := range seenMACs {
 		if len(seenIPsForMac) > 1 {
-			summary := fmt.Sprintf("MAC %s responde para múltiples IPs: %s", mac, strings.Join(seenIPsForMac, ", "))
+			summary := fmt.Sprintf("MAC %s responds for multiple IPs: %s", mac, strings.Join(seenIPsForMac, ", "))
 			multiIPSummaries = append(multiIPSummaries, summary)
 		}
 	}

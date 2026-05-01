@@ -4,11 +4,13 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 
 ## Descripción
 
-`go-arpscan` envía paquetes ARP a los hosts de la red local para descubrir dispositivos activos, recopilar sus direcciones IP y MAC, e incluso realizar ataques de suplantación para auditorías de seguridad. Aprovecha la concurrencia de Go para escanear redes de forma extremadamente rápida, incluso con un gran número de hosts.
+`go-arpscan` envía paquetes ARP a los hosts de la red local para descubrir dispositivos activos, recopilar sus direcciones IP y MAC, e incluso realizar ataques de suplantación para auditorías de seguridad. El motor estándar mantiene compatibilidad amplia mediante `gopacket`/`pcap`; en Linux, el motor `--fast` usa `AF_PACKET` directo, batching de syscalls y estructuras zero-allocation para escaneos de alto rendimiento.
 
 ## Características Principales
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
+*   ⚡ **Motor FAST para Linux (`--fast`)**: Usa sockets `AF_PACKET`, BPF en kernel, frames ARP preconstruidos, `sendmmsg(2)` y orden Feistel O(1) para reducir syscalls y allocations en el hot path.
+*   🧪 **Rutas PACKET_MMAP Experimentales**: `GOARPSCAN_TPACKET=1` activa `TPACKET_V3 RX_RING`; `GOARPSCAN_TX_RING=1` activa `TPACKET_V2 TX_RING` como opt-in para pruebas comparativas.
 *   📡 **Monitorización Continua de Red (`--monitor`)**: Opera como un sensor de red persistente, combinando escucha pasiva y sondeos activos para detectar nuevos dispositivos, conflictos de IP y hosts desconectados en tiempo real, generando una salida de eventos en formato JSON.
 *   🛡️ **Detección de Suplantación ARP (`--detect-arp-spoofing`)**: En modo monitor, vigila activamente la MAC del gateway y genera alertas de alta severidad si detecta un intento de suplantación.
 *   ⚔️ **Módulo de Ataque Man-in-the-Middle**: Realiza ataques de suplantación ARP (`--spoof`) para interceptar tráfico entre dos objetivos, con gestión automática del reenvío de paquetes y limpieza segura.
@@ -21,7 +23,7 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 *   🔔 **Integración con Ecosistemas de SecOps (`--webhook-url`)**: Notifica eventos del modo monitor en tiempo real a Slack, plataformas SOAR o cualquier endpoint HTTP, con soporte para cabeceras de autenticación (`--webhook-header`).
 *   🎨 **Salida Coloreada y Alineada**: Formato de salida moderno y legible, con control total sobre los colores (`--color=auto|on|off`).
 *   📜 **Salida Estructurada**: Soporte nativo para `--json` y `--csv`, facilitando la integración con scripts y herramientas de análisis.
-*   🌐 **Gestión Automática de Vendors**: Descarga automáticamente los ficheros OUI e IAB de la IEEE si no se encuentran localmente.
+*   🌐 **Gestión Automática de Vendors**: Descarga automáticamente los ficheros OUI e IAB de la IEEE si no se encuentran localmente y genera un índice binario OUI para búsquedas rápidas.
 *   🔍 **Diagnóstico de Red Avanzado**:
     *   Detecta y reporta **Conflictos de IP** (una misma IP usada por varias MACs).
     *   Detecta y reporta dispositivos **Multi-IP** (una misma MAC respondiendo para varias IPs).
@@ -30,7 +32,18 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 *   🎯 **Flexibilidad en los Objetivos**: Soporta IPs individuales, rangos (`192.168.1.1-192.168.1.254`) y notación CIDR (`192.168.1.0/24`).
 *   ⚙️ **Control Total del Escaneo**: Parámetros configurables para timeouts, reintentos, ancho de banda, aleatorización y más.
 
-## Rendimiento (Benchmarks)
+## Rendimiento
+
+`go-arpscan` tiene dos motores de escaneo:
+
+| Motor | Plataforma | Uso | Notas |
+| :--- | :--- | :--- | :--- |
+| Estándar | Linux, BSD/macOS según soporte pcap | Por defecto | Usa `gopacket`/`pcap`; mantiene compatibilidad con VLAN, LLC, padding, spoofing de campos ARP y `pcapsavefile`. |
+| FAST | Linux | `--fast` | Usa `AF_PACKET`, BPF en kernel, frame ARP estático, targets en slice plano, `sendmmsg(2)` y orden Feistel. Cae al motor estándar si se piden modos incompatibles. |
+
+Las rutas PACKET_MMAP son opt-in para pruebas: `GOARPSCAN_TPACKET=1` activa `TPACKET_V3 RX_RING`; `GOARPSCAN_TX_RING=1` activa `TPACKET_V2 TX_RING`. Ambas deben tratarse como experimentales hasta validar perfiles en la red real.
+
+### Benchmark histórico
 
 Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de rendimiento comparando `go-arpscan` contra el `arp-scan` original (escrito en C, versión 1.9.7). La prueba consistió en 10 rondas de escaneo sobre una red `/24` estándar (254 hosts).
 
@@ -45,7 +58,7 @@ Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de r
 
 ### 🔍 Precisión y Detección de Fabricantes (OUI)
 
-Mientras que ambas herramientas descubren exactamente los mismos hosts a nivel de red, `go-arpscan` ofrece un reconocimiento de hardware muy superior. Al automatizar la descarga y actualización de las bases de datos OUI e IAB de la IEEE, detecta dispositivos modernos que las herramientas clásicas no reconocen:
+Mientras que ambas herramientas descubren exactamente los mismos hosts a nivel de red, `go-arpscan` ofrece un reconocimiento de hardware muy superior. Al automatizar la descarga y actualización de las bases de datos OUI e IAB de la IEEE, detecta dispositivos modernos que las herramientas clásicas no reconocen. Además, el índice OUI binario acelera las búsquedas en el path de salida sin cargar un mapa grande de strings cuando existe el fichero `.bin`:
 
 | Dirección MAC | Detección en `arp-scan` | Detección en `go-arpscan` |
 | :--- | :--- | :--- |
@@ -104,6 +117,30 @@ sudo ./go-arpscan --localnet --json | jq '.results[] | {ip, mac, vendor}'
 # Guardar los resultados en un fichero CSV para analizarlos en una hoja de cálculo
 sudo ./go-arpscan --localnet --csv > network_scan.csv
 ```
+
+### Motor FAST en Linux
+
+El flag `--fast` activa el motor Linux de bajo nivel. Está pensado para escaneos ARP estándar: Ethernet/IPv4, ARP Request normal, sin VLAN/LLC/padding ni overrides avanzados de campos ARP. Si se pide una opción incompatible, el runner cae al motor estándar para preservar funcionalidad.
+
+```bash
+# Escaneo rápido de la red local
+sudo ./go-arpscan -I eno1 --fast --localnet --plain
+
+# Escaneo rápido de un rango concreto
+sudo ./go-arpscan -I eno1 --fast 192.168.24.1-192.168.24.254
+
+# RX_RING experimental: recepción PACKET_MMAP TPACKET_V3
+sudo GOARPSCAN_TPACKET=1 ./go-arpscan -I eno1 --fast --localnet -v
+
+# TX_RING experimental: transmisión PACKET_MMAP TPACKET_V2
+sudo GOARPSCAN_TX_RING=1 ./go-arpscan -I eno1 --fast --localnet -v
+```
+
+Notas operativas:
+
+* `--fast` es Linux-only. En otros sistemas se usa el motor estándar.
+* `GOARPSCAN_TPACKET=1` y `GOARPSCAN_TX_RING=1` son opt-in; si el setup falla, el motor registra el motivo con `-v` y usa el fallback seguro.
+* `GOARPSCAN_NOAFFINITY=1` desactiva la afinidad CPU si necesitas evitar `SchedSetaffinity`.
 
 ### Auditoría y Detección de Cambios
 
@@ -200,6 +237,39 @@ Este fichero define **conjuntos de parámetros reutilizables** para escenarios e
 
 Puedes usar los ficheros `config.complete.yaml` y `profiles.yaml` del repositorio como plantillas.
 
+## Profiling y Benchmarks de Desarrollo
+
+El binario incluye un flag frío de profiling:
+
+```bash
+sudo ./go-arpscan -I eno1 --fast --cpuprofile /tmp/go-arpscan.pprof --localnet
+go tool pprof -top ./go-arpscan /tmp/go-arpscan.pprof
+```
+
+Scripts incluidos:
+
+```bash
+# Comparativa contra arp-scan en escenarios default/fast/thorough
+sudo bash scripts/benchmark.sh
+
+# Perfil CPU de una sola ejecución --fast
+sudo IFACE=eno1 TARGETS="192.168.0.0/16" bash scripts/profile_fast.sh
+
+# Comparativa sendmmsg vs TX_RING con enfriamiento y limpieza neighbor/ARP
+sudo IFACE=eno1 TARGETS="192.168.0.0/16" bash scripts/profile_tx_compare.sh
+```
+
+`scripts/profile_tx_compare.sh` ejecuta una pasada con `sendmmsg`, limpia la tabla neighbor local de la interfaz con `ip neigh flush dev "$IFACE"`, espera para enfriar y ejecuta otra pasada con `GOARPSCAN_TX_RING=1`. Los perfiles quedan en `/tmp/go-arpscan-tx-compare/<timestamp>/`.
+
+Targets útiles del `Makefile`:
+
+```bash
+make test        # go test ./...
+make bench       # go test -bench=. -benchmem ./...
+make profile     # genera default.pgo desde benchmarks
+make build-pgo   # compila con -pgo=auto
+```
+
 ### Ejemplo de Salida
 ```
 # Salida de un escaneo normal con varios escenarios de diagnóstico
@@ -248,7 +318,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | | `--config` | `string` | Ruta al fichero de configuración YAML (`config.yaml`). | `~/.config/...` |
 | | `--profiles` | `string` | Ruta al fichero de perfiles YAML (`profiles.yaml`). | Búsqueda automática |
 | | `--profile` | `string` | Activa un perfil táctico desde el fichero de perfiles. | `""` |
-| `-I` | `--interface` | `string` | Interfaz de red a utilizar. Si no se especifica, se auto-detecta. | Auto-detectada |
+| `-I` | `--interface` | `string` | Interfaz de red a utilizar. | Auto-detectada |
 | | `--scan-timeout`| `duration` | Timeout global para todo el escaneo. | Calculado |
 | `-l` | `--localnet` | `bool` | Escanear la red local de la interfaz. | `false` |
 | `-f` | `--file` | `string` | Leer objetivos desde un fichero (usar `-` para stdin). | `""` |
@@ -293,6 +363,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | `-O` | `--ouifile` | `string` | Fichero de mapeo OUI personalizado. | `oui.txt` |
 | | `--iabfile` | `string` | Fichero de mapeo IAB personalizado. | `iab.txt` |
 | | `--macfile` | `string` | Fichero de mapeo MAC personalizado. | `""` |
+| | `--update-vendors` | `bool` | Actualiza OUI/IAB desde IEEE, regenera `oui.txt.bin` y sale. | `false` |
 | `-q` | `--quiet` | `bool` | Salida mínima (solo IP y MAC). | `false` |
 | `-x` | `--plain` | `bool` | Salida simple sin cabeceras/pies, para scripts. | `false` |
 | | `--json` | `bool` | Muestra la salida completa en formato JSON. | `false` |
@@ -304,6 +375,8 @@ $ sudo ./go-arpscan --localnet --monitor
 | `-W` | `--pcapsavefile`| `string` | Guardar respuestas ARP (ARP Reply) en un fichero pcap `<s>` para análisis en Wireshark. | `""` |
 | `-g` | `--ignoredups` | `bool` | No mostrar respuestas duplicadas. | `false` |
 | | `--color` | `string` | Controlar el uso de color en la salida (`auto`, `on`, `off`). | `auto` |
+| | `--fast` | `bool` | Usa el motor FAST Linux (`AF_PACKET`, BPF kernel, `sendmmsg`). Cae al motor estándar si la configuración es incompatible. | `false` |
+| | `--cpuprofile` | `string` | Escribe un perfil CPU pprof durante la ejecución. Solo para diagnóstico. | `""` |
 | | **--- Varios ---** | | | |
 | `-R` | `--random` | `bool` | Aleatorizar el orden de los hosts a escanear. | `false` |
 | | `--randomseed` | `int64` | Semilla para el generador de números aleatorios. | Basada en el tiempo |
@@ -312,9 +385,11 @@ $ sudo ./go-arpscan --localnet --monitor
 | `-v` | `--verbose` | `count` | Aumenta la verbosidad (-v, -vv, -vvv). | `0` |
 | `-V` | `--version` | `bool` | Muestra la versión del programa y sale. | `false` |
 
+---
 
+## Comparación con arp-scan
 
-### Comparación con arp-scan
+`go-arpscan` está fuertemente inspirado en la funcionalidad del clásico `arp-scan`, pero busca modernizar la experiencia del usuario y añadir características para la integración en flujos de trabajo actuales. La siguiente tabla muestra la correspondencia de los parámetros entre ambas herramientas.
 
 | Funcionalidad | `arp-scan` (original) | `go-arpscan` (nuestro) | Estado / Comentarios |
 | :--- | :--- | :--- | :--- |
@@ -323,10 +398,12 @@ $ sudo ./go-arpscan --localnet --monitor
 | Leer Objetivos de Fichero | `--file=<s>`, `-f <s>` | `--file=<s>`, `-f <s>` | ✅ **Implementado**. |
 | No usar DNS | `--numeric`, `-N` | `--numeric`, `-N` | ✅ **Implementado**. |
 | **Control del Escaneo** | | | |
-| Especificar Interfaz | `--interface=<s>`, `-I <s>` | `--interface=<s>`, `-I <s>` | ✅ **Implementado**. Al igual que `arp-scan`, `go-arpscan` auto-detecta la mejor interfaz si no se especifica. |
+| Especificar Interfaz | `--interface=<s>`, `-I <s>` | `--interface=<s>`, `-I <s>` | ✅ **Implementado**. También auto-detecta la mejor interfaz si no se especifica. |
 | Timeouts por Host | `--timeout=<i>`, `-t <i>` | `--host-timeout=<d>`, `-t <d>` | ✅ **Implementado**. `go-arpscan` acepta unidades de tiempo (e.g., `750ms`). |
 | Nº de Reintentos | `--retry=<i>`, `-r <i>` | `--retry=<i>`, `-r <i>` | ✅ **Implementado**. |
-| Intervalo entre Paquetes | `--interval=<x>`, `-i <x>` | `--interval=<d>`, `-i <d>` | ✅ **Implementado**. |
+| Intervalo entre Paquetes | `--interval=<x>`, `-i <x>` | `--interval=<d>`, `-i <d>` | ✅ **Implementado**. `go-arpscan` acepta unidades de duración (`100us`, `1ms`, `2s`). |
+| Motor FAST Linux | *(No disponible)* | `--fast` | 💡 **Nuevo**. AF_PACKET directo, BPF kernel, `sendmmsg` y zero-alloc hot path para escaneos ARP estándar. |
+| Profiling CPU | *(No disponible)* | `--cpuprofile=<file>` | 💡 **Nuevo**. Genera perfiles pprof para validar optimizaciones. |
 | Limitar Ancho de Banda | `--bandwidth=<x>`, `-B <x>` | `--bandwidth=<x>`, `-B <x>` | ✅ **Implementado**. |
 | Factor de Backoff | `--backoff=<f>`, `-b <f>` | `--backoff=<f>`, `-b <f>` | ✅ **Implementado**. |
 | Aleatorizar Objetivos | `--random`, `-R` | `--random`, `-R` | ✅ **Implementado**. |
@@ -370,6 +447,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | Longitud HW/Proto ARP | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | ✅ **Implementado**. |
 | Relleno (Padding) | `--padding=<h>`, `-A <h>` | `--padding=<h>`, `-A <h>` | ✅ **Implementado**. |
 | Framing LLC | `--llc`, `-L` | `--llc`, `-L` | ✅ **Implementado**. |
+
 ## Hoja de Ruta
 
 A continuación se detalla el estado actual y las funcionalidades futuras planificadas para `go-arpscan`.
@@ -387,7 +465,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 
 **Paso 2: Control del Escaneo y Paquetes**
 *   [✅] **Auto-detección de Interfaz**: Selección automática de la mejor interfaz de red.
-*   [✅] **Selección Manual de Interfaz**: `--interface (-i)`.
+*   [✅] **Selección Manual de Interfaz**: `--interface (-I)`.
 *   [✅] **Control de Reintentos**: `--retry (-r)`.
 *   [✅] **Control de Timeouts**: `--host-timeout (-t)` y `--scan-timeout` (con auto-cálculo).
 *   [✅] **Control de Ancho de Banda**: `--interval` y `--bandwidth (-B)`.
@@ -448,6 +526,20 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Modo Monitor (`--monitor`)**: Opera como un sensor persistente para la detección de cambios en la red en tiempo real.
 *   [✅] **Integración Nativa con Webhooks (`--webhook-url`)**: Conecta con ecosistemas de SecOps (Slack, SOARs) enviando eventos a endpoints HTTP con cabeceras de autenticación.
 *   [✅] **Detección Avanzada de Anomalías ARP (`--detect-arp-spoofing`)**: Amplía el modo monitor para clasificar cambios como potencialmente maliciosos (e.g., MAC flapping del gateway).
+
+### ✅ Fase 9: Motor FAST Linux y Optimización de Bajo Nivel (EN VALIDACIÓN)
+
+*Objetivo: competir con `arp-scan` en el camino crítico de escaneo ARP estándar sin sacrificar compatibilidad. El motor estándar sigue existiendo para los modos avanzados.*
+
+*   [✅] **Fast path Linux (`--fast`)**: Socket `AF_PACKET`, filtro BPF ARP Reply en kernel, frame ARP `[60]byte` preconstruido y targets en slice plano.
+*   [✅] **Batch TX con `sendmmsg(2)`**: `TXBatcher` preasignado con 32 slots para amortizar syscalls.
+*   [✅] **Orden pseudoaleatorio O(1)**: Feistel determinista con `--randomseed`, sin shuffle O(N).
+*   [✅] **OUI binario lazy**: índice `.bin` ordenado para búsqueda binaria zero-alloc cuando está disponible.
+*   [✅] **RX_RING experimental**: `GOARPSCAN_TPACKET=1` activa `TPACKET_V3 RX_RING` con fallback a `recvfrom`.
+*   [✅] **TX_RING experimental**: `GOARPSCAN_TX_RING=1` activa `TPACKET_V2 TX_RING` con fallback a `sendmmsg`.
+*   [✅] **CPU affinity opt-out**: RX/TX pinneados cuando es posible; `GOARPSCAN_NOAFFINITY=1` lo desactiva.
+*   [✅] **PGO y profiling**: targets `make profile`, `make build-pgo`, flag `--cpuprofile` y scripts `profile_fast.sh`/`profile_tx_compare.sh`.
+*   [⏳] **Decisión TX_RING como default**: pendiente de perfiles repetibles. En la medición local `sendmmsg` acumuló 600 ms de CPU muestreada y `TX_RING` 390 ms, pero `TXRing.Flush` siguió acumulando 170 ms y `Syscall6` 190 ms; por ahora permanece opt-in.
 
 ## Aviso Legal y de Responsabilidad
 

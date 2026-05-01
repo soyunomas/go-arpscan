@@ -11,51 +11,60 @@ import (
 // ValidateFlags realiza una serie de comprobaciones sobre la configuración
 // resuelta para asegurar que las combinaciones de flags son válidas.
 func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
+	if cfg.UpdateVendors {
+		if cfg.UseLocalnet || cfg.FilePath != "" || len(args) > 0 {
+			return fmt.Errorf("--update-vendors cannot be combined with --localnet, --file, or command-line targets")
+		}
+		if cfg.SpoofTargetIP != "" || cfg.GatewayIP != "" || cfg.DetectPromiscTargetIP != "" || cfg.MonitorMode || cfg.DiffMode {
+			return fmt.Errorf("--update-vendors is exclusive and cannot be combined with scan, spoofing, monitor, or diff modes")
+		}
+	}
+
 	// Validar modo de suplantación (--spoof)
 	inSpoofMode := cfg.SpoofTargetIP != "" || cfg.GatewayIP != ""
 	if inSpoofMode {
 		if cfg.SpoofTargetIP == "" || cfg.GatewayIP == "" {
-			return fmt.Errorf("los flags --spoof y --gateway deben usarse juntos")
+			return fmt.Errorf("--spoof and --gateway must be used together")
 		}
 		// El modo Spoof es exclusivo y no se puede combinar con modos de escaneo.
 		if cfg.UseLocalnet || cfg.FilePath != "" || len(args) > 0 {
-			return fmt.Errorf("el modo --spoof no se puede combinar con --localnet, --file o objetivos en la línea de comandos")
+			return fmt.Errorf("--spoof cannot be combined with --localnet, --file, or command-line targets")
 		}
 		if cfg.DiffMode {
-			return fmt.Errorf("el modo --spoof no se puede combinar con --diff")
+			return fmt.Errorf("--spoof cannot be combined with --diff")
 		}
 		if cfg.MonitorMode {
-			return fmt.Errorf("el modo --spoof no se puede combinar con --monitor")
+			return fmt.Errorf("--spoof cannot be combined with --monitor")
 		}
 	}
 
 	// Validar modo de detección promiscuo (--detect-promisc)
 	if cfg.DetectPromiscTargetIP != "" {
 		if cfg.UseLocalnet || cfg.FilePath != "" || len(args) > 0 {
-			return fmt.Errorf("el modo --detect-promisc no se puede combinar con --localnet, --file o objetivos en la línea de comandos")
+			return fmt.Errorf("--detect-promisc cannot be combined with --localnet, --file, or command-line targets")
 		}
 		if cfg.SpoofTargetIP != "" || cfg.DiffMode || cfg.MonitorMode {
-			return fmt.Errorf("el modo --detect-promisc es exclusivo y no se puede combinar con --spoof, --diff o --monitor")
+			return fmt.Errorf("--detect-promisc is exclusive and cannot be combined with --spoof, --diff, or --monitor")
 		}
 		if isAnyFormatFlagSet(cfg) {
-			return fmt.Errorf("el modo --detect-promisc no es compatible con otros flags de formato de salida")
+			return fmt.Errorf("--detect-promisc is not compatible with output format flags")
 		}
 	}
 
 	// Validar modo monitor (--monitor)
 	if cfg.MonitorMode {
 		if !cfg.UseLocalnet {
-			return fmt.Errorf("el modo --monitor requiere --localnet para definir el alcance de la monitorización")
+			return fmt.Errorf("--monitor requires --localnet to define the monitoring scope")
 		}
 		if cfg.FilePath != "" || len(args) > 0 {
-			return fmt.Errorf("el modo --monitor no se puede combinar con --file o objetivos en la línea de comandos")
+			return fmt.Errorf("--monitor cannot be combined with --file or command-line targets")
 		}
 		if cfg.SpoofTargetIP != "" || cfg.DiffMode || cfg.StateFilePath != "" {
-			return fmt.Errorf("el modo --monitor es exclusivo y no se puede combinar con --spoof, --diff o --state-file")
+			return fmt.Errorf("--monitor is exclusive and cannot be combined with --spoof, --diff, or --state-file")
 		}
 		// El modo monitor tiene su propia salida JSON, no es compatible con otros formatos.
 		if cfg.JSONOutput || cfg.CSVOutput || cfg.Plain || cfg.Quiet {
-			return fmt.Errorf("el modo --monitor no es compatible con otros flags de formato de salida (--json, --csv, etc.)")
+			return fmt.Errorf("--monitor is not compatible with output format flags (--json, --csv, etc.)")
 		}
 	}
 
@@ -63,34 +72,34 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 	// Validar dependencias de la detección de suplantación ARP
 	if cfg.DetectArpSpoofing {
 		if !cfg.MonitorMode {
-			return fmt.Errorf("el flag --detect-arp-spoofing solo es válido en modo --monitor")
+			return fmt.Errorf("--detect-arp-spoofing is only valid in --monitor mode")
 		}
 		if cfg.MonitorGatewayIP == "" {
-			return fmt.Errorf("--detect-arp-spoofing requiere que se especifique una IP de gateway con --monitor-gateway")
+			return fmt.Errorf("--detect-arp-spoofing requires a gateway IP specified with --monitor-gateway")
 		}
 	}
 	if cfg.MonitorGatewayIP != "" && !cfg.DetectArpSpoofing {
-		return fmt.Errorf("el flag --monitor-gateway solo es válido cuando se usa --detect-arp-spoofing")
+		return fmt.Errorf("--monitor-gateway is only valid when --detect-arp-spoofing is used")
 	}
 	// <<< FIN DE NUEVO BLOQUE DE VALIDACIÓN >>>
 
 	// Validar dependencias del webhook
 	if (cfg.WebhookURL != "" || len(cfg.WebhookHeaders) > 0) && !cfg.MonitorMode {
-		return fmt.Errorf("los flags --webhook-url y --webhook-header solo son válidos en modo --monitor")
+		return fmt.Errorf("--webhook-url and --webhook-header are only valid in --monitor mode")
 	}
 
 	// Validar formatos de salida mutuamente excluyentes
 	if countFormatFlags(cfg) > 1 {
-		return fmt.Errorf("los flags de formato (--json, --csv, --quiet, --plain) son mutuamente excluyentes")
+		return fmt.Errorf("output format flags (--json, --csv, --quiet, --plain) are mutually exclusive")
 	}
 
 	// Validar dependencias del modo --diff
 	if cfg.DiffMode {
 		if cfg.StateFilePath == "" {
-			return fmt.Errorf("el modo --diff requiere que se especifique un fichero de estado con --state-file")
+			return fmt.Errorf("--diff requires a state file specified with --state-file")
 		}
 		if countFormatFlags(cfg) > 0 {
-			return fmt.Errorf("el modo --diff no se puede combinar con otros flags de formato de salida (--json, --csv, etc.)")
+			return fmt.Errorf("--diff cannot be combined with output format flags (--json, --csv, etc.)")
 		}
 	}
 
@@ -103,7 +112,7 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 
 	// Validar rango de VLAN ID
 	if cfg.VlanID != 0 && (cfg.VlanID < 1 || cfg.VlanID > 4094) {
-		return fmt.Errorf("el ID de VLAN debe estar entre 1 y 4094")
+		return fmt.Errorf("VLAN ID must be between 1 and 4094")
 	}
 
 	return nil
@@ -157,12 +166,12 @@ func ParseBandwidth(bwStr string) (int64, error) {
 
 	val, err := strconv.ParseFloat(numPart, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parte numérica '%s' inválida en el ancho de banda: %w", numPart, err)
+		return 0, fmt.Errorf("invalid numeric part %q in bandwidth: %w", numPart, err)
 	}
 
 	bitsPerSecond := int64(val * multiplier)
 	if bitsPerSecond < 0 {
-		return 0, fmt.Errorf("el ancho de banda no puede ser negativo")
+		return 0, fmt.Errorf("bandwidth cannot be negative")
 	}
 
 	return bitsPerSecond, nil
