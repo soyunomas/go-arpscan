@@ -51,8 +51,18 @@ func FastEligible(cfg *Config) bool {
 	if cfg.ArpOpCode != 0 && cfg.ArpOpCode != 1 {
 		return false
 	}
-	if cfg.ArpSPA != nil || cfg.ArpSPADest {
+	if cfg.ArpSPADest {
 		return false
+	}
+	if cfg.ArpSPA != nil {
+		ifaceIPNet, err := GetSrcIPNet(cfg.Interface)
+		if err != nil {
+			return false
+		}
+		// Es elegible si la IP configurada coincide con la IP física de la interfaz.
+		if !cfg.ArpSPA.Equal(ifaceIPNet.IP.To4()) {
+			return false
+		}
 	}
 	if cfg.ArpSHA != nil || cfg.EthSrcMAC != nil || cfg.EthDstMAC != nil || cfg.ArpTHA != nil {
 		return false

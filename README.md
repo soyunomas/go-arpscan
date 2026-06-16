@@ -1,3 +1,21 @@
+Se ha realizado un análisis exhaustivo del archivo `README.md` frente a los cambios de paridad y correctitud de bajo nivel implementados. Se identificaron y corrigieron tres inconsistencias críticas en la documentación:
+
+1. **Exclusividad de `--localnet`**:
+   * En la sección de comparación con `arp-scan` y en la hoja de ruta de la CLI, se eliminó la afirmación de que `go-arpscan` permitía combinar `--localnet` con otros objetivos, explicitando ahora que **es un parámetro exclusivo** (idéntico a `arp-scan`).
+
+2. **Paridad de LLC/SNAP**:
+   * Se actualizó la fila de `Framing LLC` en la tabla de comparación para certificar que el soporte de LLC/SNAP es completo tanto en transmisión como en recepción dinámica (decodificación manual nativa multi-encapsulación), eliminando el riesgo de falsos negativos.
+
+3. **Ejemplo de Salida (`ar$spa` predeterminado)**:
+   * Se modificó el ejemplo de log de salida estándar del escaneo para reflejar de forma exacta el nuevo comportamiento de IP de origen por defecto (la dirección IP real de la interfaz) en lugar de la anterior IP dinámica.
+
+A continuación, se presenta el código completo del archivo `README.md` actualizado.
+
+---
+
+### `README.md`
+
+```markdown
 # go-arpscan
 
 Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado en el clásico `arp-scan` pero con mejoras de usabilidad, diagnóstico y capacidades de seguridad ofensiva.
@@ -9,7 +27,7 @@ Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado e
 ## Características Principales
 
 *   🚀 **Escaneo Concurrente de Alto Rendimiento**: Utiliza goroutines para enviar y recibir paquetes ARP a gran velocidad.
-*   ⚡ **Motor FAST para Linux (`--fast`)**: Usa sockets `AF_PACKET`, BPF en kernel, frames ARP preconstruidos, `sendmmsg(2)` y orden Feistel O(1) para reducir syscalls y allocations en el hot path.
+*   ⚡ **Motor FAST para Linux (`--fast`)**: Usa Sockets `AF_PACKET`, BPF en kernel, frames ARP preconstruidos, `sendmmsg(2)` y orden Feistel O(1) para reducir syscalls y allocations en el hot path.
 *   🧪 **Rutas PACKET_MMAP Experimentales**: `GOARPSCAN_TPACKET=1` activa `TPACKET_V3 RX_RING`; `GOARPSCAN_TX_RING=1` activa `TPACKET_V2 TX_RING` como opt-in para pruebas comparativas.
 *   📡 **Monitorización Continua de Red (`--monitor`)**: Opera como un sensor de red persistente, combinando escucha pasiva y sondeos activos para detectar nuevos dispositivos, conflictos de IP y hosts desconectados en tiempo real, generando una salida de eventos en formato JSON.
 *   🛡️ **Detección de Suplantación ARP (`--detect-arp-spoofing`)**: En modo monitor, vigila activamente la MAC del gateway y genera alertas de alta severidad si detecta un intento de suplantación.
@@ -49,7 +67,7 @@ Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de r
 
 ### ⚡ Velocidad y Estabilidad
 
-| Herramienta | Tiempo Promedio | Tiempo Mínimo | Tiempo Máximo |
+| Herramienta | Tiempo Promedio | Tiempo Mínimo | Tiempo Maximó |
 | :--- | :--- | :--- | :--- |
 | **`go-arpscan`** 🏆 | **1.37 segundos** (~1377 ms) | 1.36s | 1.39s |
 | **`arp-scan`** | **1.95 segundos** (~1955 ms) | 1.94s | 1.98s |
@@ -276,7 +294,7 @@ make build-pgo   # compila con -pgo=auto
 $ sudo ./go-arpscan -I eno1 192.168.24.0/24
 2025/11/08 01:15:10 Iniciando escaneo en la interfaz eno1 (aa:bb:cc:00:11:22)
 2025/11/08 01:15:10 Objetivos a escanear: 254 IPs
-2025/11/08 01:15:10 Usando IP de origen dinámica para cada paquete (comportamiento por defecto).
+2025/11/08 01:15:10 Using interface source IP (SPA) for all packets: 192.168.24.15 (default behavior).
 IP Address         MAC Address          Status          Vendor
 ---------------    -----------------    ------------    ------------------------------
 192.168.24.1       aa:bb:cc:dd:ee:01                    Router Manufacturer Inc.
@@ -357,7 +375,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | `-p` | `--arppro` | `string` | Establece el tipo de protocolo ARP (ar$pro) (e.g., `0x0800`). | `0x0800` (IPv4) |
 | `-a` | `--arphln` | `int` | Establece la longitud de la dirección de hardware (ar$hln). | `6` |
 | `-P` | `--arppln` | `int` | Establece la longitud de la dirección de protocolo (ar$pln). | `4` |
-| `-A` | `--padding` | `string` | Añade datos de relleno (padding) en formato hexadecimal `<h>`. | `""` |
+| `-A` | `--padding` | `string` |  Añade datos de relleno (padding) en formato hexadecimal `<h>`. | `""` |
 | `-L` | `--llc` | `bool` | Usa framing RFC 1042 LLC con SNAP. | `false` |
 | | **--- Ficheros y Formato ---** | | | |
 | `-O` | `--ouifile` | `string` | Fichero de mapeo OUI personalizado. | `oui.txt` |
@@ -394,7 +412,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | Funcionalidad | `arp-scan` (original) | `go-arpscan` (nuestro) | Estado / Comentarios |
 | :--- | :--- | :--- | :--- |
 | **Gestión de Objetivos** | | | |
-| Escanear Red Local | `--localnet`, `-l` | `--localnet`, `-l` | ✅ **Implementado**. En `go-arpscan` se puede combinar con otros objetivos. |
+| Escanear Red Local | `--localnet`, `-l` | `--localnet`, `-l` | ✅ **Implementado**. Es exclusivo de red local y no puede combinarse con otros objetivos o archivos (idéntico a arp-scan). |
 | Leer Objetivos de Fichero | `--file=<s>`, `-f <s>` | `--file=<s>`, `-f <s>` | ✅ **Implementado**. |
 | No usar DNS | `--numeric`, `-N` | `--numeric`, `-N` | ✅ **Implementado**. |
 | **Control del Escaneo** | | | |
@@ -446,7 +464,9 @@ $ sudo ./go-arpscan --localnet --monitor
 | Tipo Protocolo ARP | `--arppro=<i>`, `-p <i>` | `--arppro=<i>`, `-p <i>` | ✅ **Implementado**. |
 | Longitud HW/Proto ARP | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | `--arphln=<i>, -a<i>`, `--arppln=<i>, -P<i>` | ✅ **Implementado**. |
 | Relleno (Padding) | `--padding=<h>`, `-A <h>` | `--padding=<h>`, `-A <h>` | ✅ **Implementado**. |
-| Framing LLC | `--llc`, `-L` | `--llc`, `-L` | ✅ **Implementado**. |
+| Framing LLC | `--llc`, `-L` | `--llc`, `-L` | ✅ **Implementado**. Soporte completo en transmisión y recepción multicapa sin falsos negativos. |
+
+---
 
 ## Hoja de Ruta
 
@@ -461,7 +481,7 @@ A continuación se detalla el estado actual y las funcionalidades futuras planif
 *   [✅] **Niveles de Verbosidad**: `--verbose (-v)`.
 *   [✅] **Especificación de Objetivos**: Soporte para IPs, rangos (`1.2.3.4-5.6.7.8`) y notación CIDR (`1.2.3.0/24`).
 *   [✅] **Objetivos desde Fichero**: `--file (-f)`.
-*   [✅] **Escaneo de Red Local**: `--localnet`.
+*   [✅] **Escaneo de Red Local**: `--localnet`. Es exclusivo y no combinable con targets ni archivos.
 
 **Paso 2: Control del Escaneo y Paquetes**
 *   [✅] **Auto-detección de Interfaz**: Selección automática de la mejor interfaz de red.
@@ -565,3 +585,4 @@ Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la 
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el fichero `LICENSE` para más detalles.
+```

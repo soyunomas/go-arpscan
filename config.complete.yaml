@@ -11,7 +11,7 @@
 
 # --- PREFERENCIAS GENERALES ---
 
-# Interfaz de red a usar por defecto (-i, --interface).
+# Interfaz de red a usar por defecto (-I, --interface).
 # Ejemplo: "eth0", "enp3s0", "wlan0".
 interface: ""
 

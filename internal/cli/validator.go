@@ -20,6 +20,16 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 		}
 	}
 
+	// Validar exclusividad de --localnet (alineado con arp-scan)
+	if cfg.UseLocalnet {
+		if cfg.FilePath != "" {
+			return fmt.Errorf("--localnet cannot be combined with --file")
+		}
+		if len(args) > 0 {
+			return fmt.Errorf("--localnet cannot be combined with command-line targets")
+		}
+	}
+
 	// Validar modo de suplantación (--spoof)
 	inSpoofMode := cfg.SpoofTargetIP != "" || cfg.GatewayIP != ""
 	if inSpoofMode {
@@ -102,13 +112,6 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 			return fmt.Errorf("--diff cannot be combined with output format flags (--json, --csv, etc.)")
 		}
 	}
-
-	// Validar --bandwidth y --interval
-	// Esta lógica es un poco más compleja porque necesitamos saber si los flags fueron
-	// explícitamente seteados. Por ahora, asumimos que la lógica de carga ya ha manejado
-	// la precedencia y podemos simplemente comprobar si ambos tienen valores no-default.
-	// NOTA: Cobra no facilita saber si un flag se seteó desde un fichero de config vs linea de comandos.
-	// La comprobación original en main.go era más precisa. La simplificaremos aquí por ahora.
 
 	// Validar rango de VLAN ID
 	if cfg.VlanID != 0 && (cfg.VlanID < 1 || cfg.VlanID > 4094) {

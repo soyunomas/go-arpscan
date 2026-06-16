@@ -72,10 +72,10 @@ func printScanHeader(scancfg *scanner.Config, cfg *config.ResolvedConfig) {
 
 	if scancfg.ArpSPADest {
 		log.Println("Using dynamic source IP equal to target IP (--arpspa=dest).")
-	} else if scancfg.ArpSPA != nil {
+	} else if cfg.ArpSPA != "" {
 		log.Printf("Using custom source IP (SPA) for all packets: %s", scancfg.ArpSPA)
 	} else {
-		log.Println("Using dynamic source IP for each packet (default behavior).")
+		log.Printf("Using interface source IP (SPA) for all packets: %s (default behavior).", scancfg.ArpSPA)
 	}
 
 	if cfg.ArpSHA != "" {

@@ -4,6 +4,7 @@ package scanner
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"go-arpscan/internal/oui"
 	"log"
@@ -92,6 +93,52 @@ func ipToKey(ip net.IP) [4]byte {
 	return key
 }
 
+// parseARPPacket comprueba si los datos de la trama corresponden a alguno de los
+// formatos de encapsulación soportados (Ethernet II, LLC/SNAP, VLAN, VLAN+LLC/SNAP).
+// Devuelve el desplazamiento (offset) donde comienza la carga útil ARP, o -1 si no es válida.
+func parseARPPacket(data []byte) int {
+	if len(data) < 14 {
+		return -1
+	}
+
+	proto := binary.BigEndian.Uint16(data[12:14])
+	off := 14
+
+	// 1. Manejo opcional de cabecera VLAN (802.1Q)
+	if proto == 0x8100 {
+		if len(data) < 18 {
+			return -1
+		}
+		proto = binary.BigEndian.Uint16(data[16:18])
+		off = 18
+	}
+
+	// 2. Formato Ethernet II Estándar
+	if proto == 0x0806 {
+		if len(data) >= off+28 {
+			return off
+		}
+		return -1
+	}
+
+	// 3. Formato 802.3 LLC/SNAP (EtherType <= 1500 indica longitud)
+	if proto <= 1500 {
+		if len(data) < off+3+5+28 {
+			return -1
+		}
+		// Decodificación de LLC: DSAP (0xAA), SSAP (0xAA), Control (0x03)
+		if data[off] == 0xAA && data[off+1] == 0xAA && data[off+2] == 0x03 {
+			// Decodificación de SNAP: OUI (3 bytes), Protocolo (2 bytes)
+			snapProto := binary.BigEndian.Uint16(data[off+6 : off+8])
+			if snapProto == 0x0806 { // SNAP ARP
+				return off + 8
+			}
+		}
+	}
+
+	return -1
+}
+
 func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	// Timeout corto (10ms) para evitar bloqueo de goroutine al salir
 	handle, err := pcap.OpenLive(cfg.Interface.Name, int32(cfg.Snaplen), true, 10*time.Millisecond)
@@ -99,9 +146,10 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 		return nil, fmt.Errorf("could not open pcap handle: %w", err)
 	}
 
-	bpfFilter := "arp"
+	// Filtro BPF expandido para capturar respuestas encapsuladas en LLC/SNAP y/o VLANs
+	bpfFilter := "arp or (ether[12:2] <= 1500 and ether[14:2] == 0xaaaa) or (vlan and (arp or (ether[16:2] <= 1500 and ether[18:2] == 0xaaaa)))"
 	if cfg.VlanID > 0 {
-		bpfFilter = fmt.Sprintf("vlan %d and arp", cfg.VlanID)
+		bpfFilter = fmt.Sprintf("vlan %d and (arp or (ether[16:2] <= 1500 and ether[18:2] == 0xaaaa))", cfg.VlanID)
 	}
 	if cfg.Verbosity >= 2 {
 		log.Printf("Setting pcap BPF filter: %q", bpfFilter)
@@ -202,7 +250,6 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 			}
 
 			// Esperamos el timeout del host.
-			// NOTA: Esto cubre el tiempo de espera para el ÚLTIMO paquete enviado en el bucle anterior.
 			timeoutCh := time.After(time.Duration(currentHostTimeout))
 
 			select {
@@ -217,11 +264,6 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 
 		close(jobs)
 		wgSenders.Wait()
-
-		// OPTIMIZACIÓN CRÍTICA:
-		// Eliminamos time.Sleep(cfg.HostTimeout) que estaba aquí.
-		// Ya hemos esperado 'timeoutCh' en la última iteración del bucle,
-		// lo cual cubre el RTT del último paquete enviado.
 
 		cancel() // Cancelamos contexto de listener explícitamente
 		wgListener.Wait()
@@ -289,14 +331,9 @@ func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *C
 	}
 }
 
-// listener recibe paquetes.
+// listener recibe paquetes utilizando el parser manual multi-formato de alto rendimiento.
 func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[[4]byte]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer, pendingTargets *int64) {
 	defer wg.Done()
-	var eth layers.Ethernet
-	var arp layers.ARP
-	var dot1q layers.Dot1Q
-	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &dot1q, &arp)
-	decoded := make([]gopacket.LayerType, 0, 4)
 
 	for {
 		select {
@@ -311,41 +348,40 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 				return
 			}
 
-			decoded = decoded[:0]
-			_ = parser.DecodeLayers(data, &decoded)
-
-			isARP := false
-			for _, layerType := range decoded {
-				if layerType == layers.LayerTypeARP {
-					isARP = true
-					break
-				}
-			}
-			if !isARP {
+			// Decodificación manual rápida de cabeceras de encapsulación
+			arpOff := parseARPPacket(data)
+			if arpOff == -1 {
 				continue
 			}
 
-			if arp.Operation == layers.ARPReply && pcapWriter != nil {
+			// Extracción de campos clave del payload ARP de 28 bytes
+			arpOp := binary.BigEndian.Uint16(data[arpOff+6 : arpOff+8])
+			arpSHA := data[arpOff+8 : arpOff+14]
+			arpSPA := data[arpOff+14 : arpOff+18]
+
+			// Guardar respuestas ARP Reply válidas si está configurado el pcapWriter
+			if arpOp == 2 && pcapWriter != nil { // 2 = ARP Reply
 				if err := pcapWriter.WritePacket(ci, data); err != nil {
 					log.Printf("pcap warning: %v", err)
 				}
 			}
 
-			if arp.Operation != layers.ARPReply || bytes.Equal(cfg.Interface.HardwareAddr, arp.SourceHwAddress) {
+			// Descartar si no es un ARP Reply o si es un reflejo de nuestra propia interfaz
+			if arpOp != 2 || bytes.Equal(cfg.Interface.HardwareAddr, arpSHA) {
 				continue
 			}
 
-			key := ipToKey(arp.SourceProtAddress)
+			key := ipToKey(arpSPA)
 			target, found := targets[key]
 			if !found {
 				if cfg.Verbosity >= 1 {
-					log.Printf("Received reply from unknown target: %s", net.IP(arp.SourceProtAddress))
+					log.Printf("Received reply from unknown target: %s", net.IP(arpSPA))
 				}
 				continue
 			}
 
 			srcIPStr := target.IP.String()
-			srcMACStr := net.HardwareAddr(arp.SourceHwAddress).String()
+			srcMACStr := net.HardwareAddr(arpSHA).String()
 
 			if cfg.Verbosity >= 2 {
 				log.Printf("Received ARP Reply from %s [%s]", srcIPStr, srcMACStr)

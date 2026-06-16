@@ -166,29 +166,32 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	}
 
 	// --- Vendors ---
-	if err := oui.EnsureFile(cfg.OUIFilePath, ieeeOUIURL, "OUI"); err != nil {
-		log.Printf("Warning: OUI file management failed: %v.", err)
-	}
-	if err := oui.EnsureFile(cfg.IABFilePath, ieeeIABURL, "IAB"); err != nil {
-		log.Printf("Warning: IAB file management failed: %v.", err)
-	}
-	vendorDB, err := oui.NewVendorDB(cfg.OUIFilePath, cfg.IABFilePath, cfg.MACFilePath, cfg.VerboseCount)
-	if err != nil {
-		return nil, fmt.Errorf("error loading vendor database: %w", err)
+	var vendorDB *oui.VendorDB
+	if !cfg.Quiet {
+		if err := oui.EnsureFile(cfg.OUIFilePath, ieeeOUIURL, "OUI"); err != nil {
+			log.Printf("Warning: OUI file management failed: %v.", err)
+		}
+		if err := oui.EnsureFile(cfg.IABFilePath, ieeeIABURL, "IAB"); err != nil {
+			log.Printf("Warning: IAB file management failed: %v.", err)
+		}
+		vendorDB, err = oui.NewVendorDB(cfg.OUIFilePath, cfg.IABFilePath, cfg.MACFilePath, cfg.VerboseCount)
+		if err != nil {
+			return nil, fmt.Errorf("error loading vendor database: %w", err)
+		}
+	} else {
+		// En modo silencioso (--quiet/-q) se evita por completo la descarga, verificación o carga de
+		// los archivos de vendors (OUI/IAB) para reducir drásticamente el consumo de memoria,
+		// evitar retrasos de red y permitir ejecuciones seguras offline sin advertencias.
+		// Inicializamos un VendorDB vacío para evitar pánicos por puntero nulo en otros paths.
+		vendorDB, _ = oui.NewVendorDB("", "", "", 0)
 	}
 
 	// --- Configuración de Tiempos y Ancho de Banda ---
 	interval := cfg.Interval
 
-	// OPTIMIZACIÓN "TURBO": Si el usuario no especificó ancho de banda y dejó el intervalo por defecto (1ms),
-	// reducimos el intervalo a 300 microsegundos para ser competitivos con C (arp-scan).
-	// Esto reduce el tiempo de transmisión de 1000 hosts de 1.0s a 0.3s.
-	if cfg.Bandwidth == "" && interval == 1*time.Millisecond {
-		interval = 800 * time.Microsecond
-		if cfg.VerboseCount > 0 {
-			log.Println("Optimizing interval to 800µs (Balanced Mode).")
-		}
-	} else if cfg.Bandwidth != "" {
+	// Se respeta estrictamente el intervalo local o de configuración por defecto (ej. 1ms).
+	// Si se define un ancho de banda explícito, este tiene prioridad para calcular el intervalo.
+	if cfg.Bandwidth != "" {
 		bitsPerSecond, err := cli.ParseBandwidth(cfg.Bandwidth)
 		if err != nil {
 			return nil, fmt.Errorf("invalid bandwidth: %w", err)
@@ -208,8 +211,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		// Tiempo de espera para el ÚLTIMO paquete (Backoff acumulado)
 		lastPacketWait := time.Duration(float64(cfg.HostTimeout) * math.Pow(cfg.BackoffFactor, float64(cfg.Retry-1)))
 
-		// Buffer de seguridad mínimo (Precepto #53: Deadlines ajustados)
-		// 100ms es suficiente para procesamiento de cola.
+		// Buffer de seguridad mínimo (Deadlines ajustados)
 		safetyBuffer := 100 * time.Millisecond
 
 		calculatedTimeout := txTime + lastPacketWait + safetyBuffer
@@ -237,6 +239,13 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 				return nil, fmt.Errorf("invalid --arpspa source IP: %s", cfg.ArpSPA)
 			}
 		}
+	} else {
+		// Comportamiento por defecto (idéntico a arp-scan): usar la IP real de la interfaz.
+		ifaceIPNet, err := scanner.GetSrcIPNet(iface)
+		if err != nil {
+			return nil, fmt.Errorf("could not get interface source IP: %w", err)
+		}
+		finalArpSPA = ifaceIPNet.IP.To4()
 	}
 
 	var finalArpSHA, finalEthSrcMAC, finalEthDstMAC, finalArpTHA net.HardwareAddr
