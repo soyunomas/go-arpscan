@@ -1,21 +1,3 @@
-Se ha realizado un análisis exhaustivo del archivo `README.md` frente a los cambios de paridad y correctitud de bajo nivel implementados. Se identificaron y corrigieron tres inconsistencias críticas en la documentación:
-
-1. **Exclusividad de `--localnet`**:
-   * En la sección de comparación con `arp-scan` y en la hoja de ruta de la CLI, se eliminó la afirmación de que `go-arpscan` permitía combinar `--localnet` con otros objetivos, explicitando ahora que **es un parámetro exclusivo** (idéntico a `arp-scan`).
-
-2. **Paridad de LLC/SNAP**:
-   * Se actualizó la fila de `Framing LLC` en la tabla de comparación para certificar que el soporte de LLC/SNAP es completo tanto en transmisión como en recepción dinámica (decodificación manual nativa multi-encapsulación), eliminando el riesgo de falsos negativos.
-
-3. **Ejemplo de Salida (`ar$spa` predeterminado)**:
-   * Se modificó el ejemplo de log de salida estándar del escaneo para reflejar de forma exacta el nuevo comportamiento de IP de origen por defecto (la dirección IP real de la interfaz) en lugar de la anterior IP dinámica.
-
-A continuación, se presenta el código completo del archivo `README.md` actualizado.
-
----
-
-### `README.md`
-
-```markdown
 # go-arpscan
 
 Un escáner de red ARP rápido, moderno y concurrente escrito en Go, inspirado en el clásico `arp-scan` pero con mejoras de usabilidad, diagnóstico y capacidades de seguridad ofensiva.
@@ -585,4 +567,4 @@ Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la 
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el fichero `LICENSE` para más detalles.
-```
+
