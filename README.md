@@ -45,16 +45,16 @@ Las rutas PACKET_MMAP son opt-in para pruebas: `GOARPSCAN_TPACKET=1` activa `TPA
 
 ### Benchmark histórico
 
-Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de rendimiento comparando `go-arpscan` contra el `arp-scan` original (escrito en C, versión 1.9.7). La prueba consistió en 10 rondas de escaneo sobre una red `/24` estándar (256 objetivos, incluyendo red y broadcast como arp-scan).
+Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de rendimiento comparando `go-arpscan` contra el `arp-scan` original (escrito en C, versión 1.9.7). La prueba consistió en 3 rondas de escaneo sobre una red `/24` estándar (256 objetivos, incluyendo red y broadcast).
 
 ### ⚡ Velocidad y Estabilidad
 
-| Herramienta | Tiempo Promedio | Tiempo Mínimo | Tiempo Maximó |
+| Herramienta | Tiempo Promedio | Tiempo Mínimo | Tiempo Máximo |
 | :--- | :--- | :--- | :--- |
-| **`go-arpscan`** 🏆 | **1.37 segundos** (~1377 ms) | 1.36s | 1.39s |
-| **`arp-scan`** | **1.95 segundos** (~1955 ms) | 1.94s | 1.98s |
+| **`go-arpscan`** 🏆 | **1.44 segundos** (~1437 ms) | 1.43s | 1.44s |
+| **`arp-scan`** | **1.59 segundos** (~1593 ms) | 1.59s | 1.60s |
 
-*Resultado: `go-arpscan` es aproximadamente un **30% más rápido** en cada escaneo. Además, su ejecución es extremadamente estable, con una variación de apenas ~35ms entre su ejecución más rápida y la más lenta.*
+*Resultado: `go-arpscan` es aproximadamente un **10% más rápido** en cada escaneo. Además, su ejecución es extremadamente estable, con una variación de apenas ~14ms entre su ejecución más rápida y la más lenta.*
 
 ### 🔍 Precisión y Detección de Fabricantes (OUI)
 
