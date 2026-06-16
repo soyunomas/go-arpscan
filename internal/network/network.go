@@ -13,7 +13,7 @@ import (
 // Soporta: IPs individuales, rangos de IP (1.1.1.1-1.1.1.10), CIDRs,
 // formato red:máscara (192.168.1.0:255.255.255.0, compatible con arp-scan)
 // y hostnames (a menos que numeric sea true).
-func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
+func ResolveTargets(targets []string, numeric bool, excludeBroadcast bool) ([]net.IP, error) {
 	ipMap := make(map[string]struct{})
 
 	for _, target := range targets {
@@ -25,7 +25,7 @@ func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 			if netIP != nil && maskIP != nil && netIP.To4() != nil && maskIP.To4() != nil {
 				mask := net.IPv4Mask(maskIP.To4()[0], maskIP.To4()[1], maskIP.To4()[2], maskIP.To4()[3])
 				ipNet := &net.IPNet{IP: netIP.Mask(mask), Mask: mask}
-				ips, err := GetIPs(ipNet)
+				ips, err := GetIPs(ipNet, excludeBroadcast)
 				if err != nil {
 					return nil, fmt.Errorf("error generating IPs for %s: %w", target, err)
 				}
@@ -63,7 +63,7 @@ func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 		// Intento 2: ¿Es una notación CIDR? (e.g., 192.168.1.0/24)
 		_, ipNet, err := net.ParseCIDR(target)
 		if err == nil {
-			ips, err := GetIPs(ipNet)
+			ips, err := GetIPs(ipNet, excludeBroadcast)
 			if err != nil {
 				return nil, fmt.Errorf("error generating IPs for CIDR %s: %w", target, err)
 			}
@@ -109,14 +109,14 @@ func ResolveTargets(targets []string, numeric bool) ([]net.IP, error) {
 	return result, nil
 }
 
-func GetIPs(cidr *net.IPNet) ([]net.IP, error) {
+func GetIPs(cidr *net.IPNet, excludeBroadcast bool) ([]net.IP, error) {
 	var ips []net.IP
 	for ip := cidr.IP.Mask(cidr.Mask); cidr.Contains(ip); inc(ip) {
 		dstIP := make(net.IP, len(ip))
 		copy(dstIP, ip)
 		ips = append(ips, dstIP)
 	}
-	if len(ips) > 2 {
+	if excludeBroadcast && len(ips) > 2 {
 		return ips[1 : len(ips)-1], nil
 	}
 	return ips, nil

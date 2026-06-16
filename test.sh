@@ -3,6 +3,7 @@
 # Configuración de rutas
 GO_BIN="./bin/go-arpscan"
 C_BIN="arp-scan"
+GO_FAST="${GO_FAST:-1}"
 
 # Detección automática de la interfaz principal (la que tiene salida a internet)
 # Esto evita que arp-scan se pierda en interfaces virtuales o Docker.
@@ -32,14 +33,19 @@ limpiar_red() {
 run_test_case() {
     local TITULO=$1
     local GO_INT=$2    # Intervalo Go (ej: 800us)
-    local C_INT=$3     # Intervalo C (us) (ej: 800)
+    local C_INT=$3     # Intervalo arp-scan (ej: 800u = 800us, 1 = 1ms)
     local RETRY=$4
     local TIMEOUT_GO=$5 # String con unidad (ej: 500ms)
     local TIMEOUT_C=$6  # Entero ms (ej: 500)
 
     echo ""
     echo -e "${BLUE}=== TEST: $TITULO ===${NC}"
-    echo -e "${BLUE}Params: Int=$GO_INT, Re=$RETRY, T/O=$TIMEOUT_GO${NC}"
+    echo -e "${BLUE}Params: GoInt=$GO_INT, ArpInt=$C_INT, Re=$RETRY, T/O=$TIMEOUT_GO${NC}"
+
+    local GO_FAST_ARGS=()
+    if [ "$GO_FAST" = "1" ]; then
+        GO_FAST_ARGS+=(--fast)
+    fi
 
     # --- GO-ARPSCAN ---
     limpiar_red
@@ -47,10 +53,19 @@ run_test_case() {
     
     start_go=$(date +%s%N)
     # Pasamos explícitamente la interfaz con -I
-    OUTPUT_GO=$(sudo $GO_BIN -I $IFACE --localnet --interval $GO_INT --retry $RETRY --host-timeout $TIMEOUT_GO --plain)
+    ERR_GO=$(mktemp)
+    OUTPUT_GO=$(sudo "$GO_BIN" -I "$IFACE" "${GO_FAST_ARGS[@]}" --localnet --interval "$GO_INT" --retry "$RETRY" --host-timeout "$TIMEOUT_GO" --plain --ignoredups --numeric 2>"$ERR_GO")
+    STATUS_GO=$?
     end_go=$(date +%s%N)
+    if [ "$STATUS_GO" -ne 0 ]; then
+        echo -e "${RED}GO-ARPSCAN falló (exit=$STATUS_GO):${NC}"
+        cat "$ERR_GO"
+        rm -f "$ERR_GO"
+        return 1
+    fi
+    rm -f "$ERR_GO"
     
-    COUNT_GO=$(echo "$OUTPUT_GO" | wc -l)
+    COUNT_GO=$(echo "$OUTPUT_GO" | grep -E '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}[[:space:]]+' | wc -l)
     DUR_GO=$(( ($end_go - $start_go) / 1000000 ))
     echo "   Hosts: $COUNT_GO | Tiempo: ${DUR_GO} ms"
 
@@ -59,12 +74,21 @@ run_test_case() {
     echo -e "${RED}▶ ARP-SCAN (C)...${NC}"
     
     start_c=$(date +%s%N)
-    # Usamos flags cortos: -I (interfaz), -i (intervalo us), -t (timeout ms), -r (retry)
+    # arp-scan: -i acepta entero en ms o sufijo u/U para microsegundos.
     # Forzamos la interfaz con -I para evitar el cuelgue
-    OUTPUT_C=$(sudo $C_BIN -I $IFACE --localnet -i $C_INT -r $RETRY -t $TIMEOUT_C --plain --quiet --ignoredups)
+    ERR_C=$(mktemp)
+    OUTPUT_C=$(sudo "$C_BIN" -I "$IFACE" --localnet -i "$C_INT" -r "$RETRY" -t "$TIMEOUT_C" --plain --quiet --ignoredups 2>"$ERR_C")
+    STATUS_C=$?
     end_c=$(date +%s%N)
+    if [ "$STATUS_C" -ne 0 ]; then
+        echo -e "${RED}ARP-SCAN falló (exit=$STATUS_C):${NC}"
+        cat "$ERR_C"
+        rm -f "$ERR_C"
+        return 1
+    fi
+    rm -f "$ERR_C"
     
-    COUNT_C=$(echo "$OUTPUT_C" | wc -l)
+    COUNT_C=$(echo "$OUTPUT_C" | grep -E '^[[:space:]]*[0-9]{1,3}(\.[0-9]{1,3}){3}[[:space:]]+' | wc -l)
     DUR_C=$(( ($end_c - $start_c) / 1000000 ))
     echo "   Hosts: $COUNT_C | Tiempo: ${DUR_C} ms"
 
@@ -81,8 +105,8 @@ run_test_case() {
 
 # 1. ESCENARIO EQUILIBRADO (Lo justo para ambos)
 # Intervalo 800us (0.8ms), 2 reintentos, 400ms timeout
-run_test_case "BALANCEADO" "800us" "800" 2 "400ms" 400
+run_test_case "BALANCEADO" "800us" "800u" 2 "400ms" 400
 
 # 2. ESCENARIO ESTRÉS (Puro throughput)
 # Intervalo 300us, 3 reintentos, 200ms timeout
-run_test_case "TURBO/ESTRÉS" "300us" "300" 3 "200ms" 200
+run_test_case "TURBO/ESTRÉS" "300us" "300u" 3 "200ms" 200

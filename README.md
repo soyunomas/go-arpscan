@@ -45,7 +45,7 @@ Las rutas PACKET_MMAP son opt-in para pruebas: `GOARPSCAN_TPACKET=1` activa `TPA
 
 ### Benchmark histórico
 
-Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de rendimiento comparando `go-arpscan` contra el `arp-scan` original (escrito en C, versión 1.9.7). La prueba consistió en 10 rondas de escaneo sobre una red `/24` estándar (254 hosts).
+Para validar la eficiencia de la concurrencia en Go, se realizó una prueba de rendimiento comparando `go-arpscan` contra el `arp-scan` original (escrito en C, versión 1.9.7). La prueba consistió en 10 rondas de escaneo sobre una red `/24` estándar (256 objetivos, incluyendo red y broadcast como arp-scan).
 
 ### ⚡ Velocidad y Estabilidad
 
@@ -275,7 +275,7 @@ make build-pgo   # compila con -pgo=auto
 # Salida de un escaneo normal con varios escenarios de diagnóstico
 $ sudo ./go-arpscan -I eno1 192.168.24.0/24
 2025/11/08 01:15:10 Iniciando escaneo en la interfaz eno1 (aa:bb:cc:00:11:22)
-2025/11/08 01:15:10 Objetivos a escanear: 254 IPs
+2025/11/08 01:15:10 Objetivos a escanear: 256 IPs
 2025/11/08 01:15:10 Using interface source IP (SPA) for all packets: 192.168.24.15 (default behavior).
 IP Address         MAC Address          Status          Vendor
 ---------------    -----------------    ------------    ------------------------------
@@ -324,6 +324,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | `-f` | `--file` | `string` | Leer objetivos desde un fichero (usar `-` para stdin). | `""` |
 | | `--exclude` | `stringSlice` | Excluye IPs o rangos CIDR del escaneo. | `nil` |
 | | `--exclude-file` | `string` | Excluye los objetivos listados en un fichero. | `""` |
+| | `--exclude-broadcast` | `bool` | Excluye direcciones de red y broadcast de CIDR, `network:mask` y `--localnet`. | `false` |
 | `-N` | `--numeric` | `bool` | No realizar resolución de nombres de host (DNS). | `false` |
 | `-t` | `--host-timeout` | `duration` | Timeout inicial para el primer paquete enviado a un host. | `500ms` |
 | `-r` | `--retry` | `int` | Número total de intentos por host (1 = un paquete, sin reintentos). | `2` |
@@ -380,7 +381,7 @@ $ sudo ./go-arpscan --localnet --monitor
 | | **--- Varios ---** | | | |
 | `-R` | `--random` | `bool` | Aleatorizar el orden de los hosts a escanear. | `false` |
 | | `--randomseed` | `int64` | Semilla para el generador de números aleatorios. | Basada en el tiempo |
-| `-Q` | `--vlan` | `int` | Especifica el ID de VLAN 802.1Q `<i>` (1-4094). | `0` |
+| `-Q` | `--vlan` | `int` | Especifica el ID de VLAN 802.1Q `<i>` (0-4095). `-1` desactiva VLAN. | `-1` |
 | `-n` | `--snap` | `int` | Establece la longitud de captura pcap a `<i>` bytes. | `65536` |
 | `-v` | `--verbose` | `count` | Aumenta la verbosidad (-v, -vv, -vvv). | `0` |
 | `-V` | `--version` | `bool` | Muestra la versión del programa y sale. | `false` |
@@ -567,4 +568,3 @@ Este proyecto está fuertemente inspirado por la funcionalidad y robustez de la 
 ## Licencia
 
 Este proyecto está bajo la Licencia MIT. Ver el fichero `LICENSE` para más detalles.
-

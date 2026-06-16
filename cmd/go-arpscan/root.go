@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go-arpscan/internal/cli"
 	"go-arpscan/internal/config"
+	"go-arpscan/internal/flagval"
 	"go-arpscan/internal/runner"
 	"log"
 	"os"
@@ -217,12 +218,13 @@ func init() {
 	rootCmd.Flags().StringP("file", "f", "", "Read hostnames or addresses from file <s>.\nOne hostname or IP address per line. Use \"-\" for standard input.")
 	rootCmd.Flags().StringSlice("exclude", nil, "Exclude IPs or CIDR ranges from the scan (e.g., --exclude 1.1.1.1,1.1.2.0/24).")
 	rootCmd.Flags().String("exclude-file", "", "Exclude targets listed in file <s>.")
+	rootCmd.Flags().Bool("exclude-broadcast", false, "Exclude network and broadcast addresses from CIDR, network:mask, and --localnet targets.")
 	rootCmd.Flags().BoolP("numeric", "N", false, "Do not perform hostname resolution (DNS).")
 
 	// --- Control del Escaneo ---
-	rootCmd.Flags().DurationP("host-timeout", "t", 500*time.Millisecond, "Set the initial per-host timeout to <d> (e.g., 500ms, 1s).\nThis timeout applies to the first packet sent to each host. Later timeouts\nare multiplied by the backoff factor.")
+	rootCmd.Flags().VarP(flagval.NewMillis(500*time.Millisecond), "host-timeout", "t", "Set the initial per-host timeout to <d>.\nAccepts a Go duration (e.g. 500ms, 1s) or a plain integer of milliseconds\n(e.g. 500, arp-scan style). This timeout applies to the first packet sent to\neach host. Later timeouts are multiplied by the backoff factor.")
 	rootCmd.Flags().IntP("retry", "r", 2, "Set the total number of attempts per host to <i>.\nA value of 1 means only one packet is sent (no retries).")
-	rootCmd.Flags().DurationP("interval", "i", 1*time.Millisecond, "Set the minimum interval between sent packets to <d>.\nThis controls outbound bandwidth. For a more intuitive control,\nconsider using --bandwidth.")
+	rootCmd.Flags().VarP(flagval.NewInterval(1*time.Millisecond), "interval", "i", "Set the minimum interval between sent packets to <d>.\nAccepts a Go duration (e.g. 1ms, 500us) or arp-scan style (10=ms, 500u=µs, 2s=s).\nThis controls outbound bandwidth. For a more intuitive control,\nconsider using --bandwidth.")
 	rootCmd.Flags().StringP("bandwidth", "B", "", "Set the desired outbound bandwidth to <x> (e.g., 1M, 256k).\nThe value is in bits/second. Supports decimal K, M, G suffixes.\nCannot be used together with --interval.")
 	rootCmd.Flags().Float64P("backoff", "b", 1.5, "Set the timeout backoff factor to <f>.\nThe per-host timeout is multiplied by this factor after each retry.")
 	rootCmd.Flags().BoolP("random", "R", false, "Randomize target host order.\nThis sends ARP packets in random order.")
@@ -251,7 +253,7 @@ func init() {
 	rootCmd.Flags().IntP("arppln", "P", 4, "Set the protocol address length to <i> (ar$pln).\nDefault is 4 for IPv4.")
 	rootCmd.Flags().StringP("padding", "A", "", "Append padding data in hexadecimal format <h> to the end of the packet.")
 	rootCmd.Flags().BoolP("llc", "L", false, "Use RFC 1042 LLC framing with SNAP.")
-	rootCmd.Flags().IntP("vlan", "Q", 0, "Set the 802.1Q VLAN ID <i> (1-4094).")
+	rootCmd.Flags().IntP("vlan", "Q", -1, "Set the 802.1Q VLAN ID <i> (0-4095). Default -1 disables VLAN tagging.")
 	rootCmd.Flags().IntP("snap", "n", 65536, "Set the pcap capture length to <i> bytes.")
 
 	// --- Monitorización Continua ---

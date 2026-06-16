@@ -54,7 +54,7 @@ type Config struct {
 	UseLLC            bool
 	Verbosity         int
 	PcapSaveFile      string
-	VlanID            uint16
+	VlanID            int
 	Snaplen           int
 	ProgressBar       *progressbar.ProgressBar
 	// Fast activa el motor zero-allocation AF_PACKET (solo Linux).
@@ -148,7 +148,7 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 
 	// Filtro BPF expandido para capturar respuestas encapsuladas en LLC/SNAP y/o VLANs
 	bpfFilter := "arp or (ether[12:2] <= 1500 and ether[14:2] == 0xaaaa) or (vlan and (arp or (ether[16:2] <= 1500 and ether[18:2] == 0xaaaa)))"
-	if cfg.VlanID > 0 {
+	if cfg.VlanID >= 0 {
 		bpfFilter = fmt.Sprintf("vlan %d and (arp or (ether[16:2] <= 1500 and ether[18:2] == 0xaaaa))", cfg.VlanID)
 	}
 	if cfg.Verbosity >= 2 {
@@ -455,17 +455,17 @@ func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstI
 	if cfg.UseLLC {
 		llc := layers.LLC{DSAP: 0xAA, SSAP: 0xAA, Control: 0x03}
 		snap := layers.SNAP{OrganizationalCode: []byte{0x00, 0x00, 0x00}, Type: layers.EthernetType(cfg.EthernetPrototype)}
-		if cfg.VlanID > 0 {
+		if cfg.VlanID >= 0 {
 			eth.EthernetType = layers.EthernetTypeDot1Q
-			dot1q := layers.Dot1Q{VLANIdentifier: cfg.VlanID}
+			dot1q := layers.Dot1Q{VLANIdentifier: uint16(cfg.VlanID)}
 			layersToSerialize = append(layersToSerialize, &eth, &dot1q, &llc, &snap, &arp)
 		} else {
 			layersToSerialize = append(layersToSerialize, &eth, &llc, &snap, &arp)
 		}
 	} else {
-		if cfg.VlanID > 0 {
+		if cfg.VlanID >= 0 {
 			eth.EthernetType = layers.EthernetTypeDot1Q
-			dot1q := layers.Dot1Q{VLANIdentifier: cfg.VlanID, Type: layers.EthernetType(cfg.EthernetPrototype)}
+			dot1q := layers.Dot1Q{VLANIdentifier: uint16(cfg.VlanID), Type: layers.EthernetType(cfg.EthernetPrototype)}
 			layersToSerialize = append(layersToSerialize, &eth, &dot1q, &arp)
 		} else {
 			layersToSerialize = append(layersToSerialize, &eth, &arp)

@@ -41,7 +41,7 @@ import (
 // FastEligible decide si la configuración es soportada por el motor rápido.
 // Si retorna false, el caller debe usar StartScan (motor original).
 func FastEligible(cfg *Config) bool {
-	if cfg.UseLLC || cfg.VlanID != 0 {
+	if cfg.UseLLC || cfg.VlanID != -1 {
 		return false
 	}
 	if len(cfg.PaddingData) != 0 {

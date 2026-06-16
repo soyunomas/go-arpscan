@@ -113,9 +113,10 @@ func ValidateFlags(cfg *config.ResolvedConfig, args []string) error {
 		}
 	}
 
-	// Validar rango de VLAN ID
-	if cfg.VlanID != 0 && (cfg.VlanID < 1 || cfg.VlanID > 4094) {
-		return fmt.Errorf("VLAN ID must be between 1 and 4094")
+	// Validar rango de VLAN ID. -1 desactiva 802.1Q; 0 es válido
+	// (priority-tagged frame), igual que arp-scan upstream.
+	if cfg.VlanID != -1 && (cfg.VlanID < 0 || cfg.VlanID > 4095) {
+		return fmt.Errorf("VLAN ID must be -1 (disabled) or between 0 and 4095")
 	}
 
 	return nil

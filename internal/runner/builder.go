@@ -81,7 +81,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	}
 	targets = append(targets, args...)
 
-	ips, err := network.ResolveTargets(targets, cfg.Numeric)
+	ips, err := network.ResolveTargets(targets, cfg.Numeric, cfg.ExcludeBroadcast)
 	if err != nil {
 		if len(targets) > 0 {
 			return nil, fmt.Errorf("error resolving targets: %w", err)
@@ -152,7 +152,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 	}
 
 	if len(ips) == 0 && cfg.SpoofTargetIP == "" {
-		return &scanner.Config{Interface: iface}, errNoTargets
+		return &scanner.Config{Interface: iface, VlanID: cfg.VlanID}, errNoTargets
 	}
 
 	// --- Aleatorización ---
@@ -325,7 +325,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		UseLLC:            cfg.UseLLC,
 		Verbosity:         cfg.VerboseCount,
 		PcapSaveFile:      cfg.PcapSaveFile,
-		VlanID:            uint16(cfg.VlanID),
+		VlanID:            cfg.VlanID,
 		Snaplen:           cfg.Snaplen,
 		Fast:              cfg.Fast,
 		RandomSeed:        cfg.RandomSeed,

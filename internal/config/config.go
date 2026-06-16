@@ -24,13 +24,14 @@ type UIConfig struct {
 }
 
 type ScanConfig struct {
-	HostTimeout   time.Duration `yaml:"host-timeout"`
-	ScanTimeout   time.Duration `yaml:"scan-timeout"`
-	Retry         int           `yaml:"retry"`
-	Bandwidth     string        `yaml:"bandwidth"`
-	Interval      time.Duration `yaml:"interval"`
-	BackoffFactor float64       `yaml:"backoff"`
-	Random        bool          `yaml:"random"`
+	HostTimeout      time.Duration `yaml:"host-timeout"`
+	ScanTimeout      time.Duration `yaml:"scan-timeout"`
+	Retry            int           `yaml:"retry"`
+	Bandwidth        string        `yaml:"bandwidth"`
+	Interval         time.Duration `yaml:"interval"`
+	BackoffFactor    float64       `yaml:"backoff"`
+	Random           bool          `yaml:"random"`
+	ExcludeBroadcast bool          `yaml:"exclude-broadcast"`
 }
 
 type MonitorConfig struct {
@@ -57,7 +58,7 @@ type SpoofingConfig struct {
 }
 
 type AdvancedConfig struct {
-	Vlan       int    `yaml:"vlan"`
+	Vlan       *int   `yaml:"vlan"`
 	ArpSPA     string `yaml:"arpspa"`
 	ArpSHA     string `yaml:"arpsha"`
 	EthSrcMAC  string `yaml:"srcaddr"`
@@ -94,6 +95,7 @@ type ProfileConfig struct {
 	Retry         int           `yaml:"retry"`
 	BackoffFactor float64       `yaml:"backoff"`
 	Bandwidth     string        `yaml:"bandwidth"`
+	Vlan          *int          `yaml:"vlan"`
 	LLC           bool          `yaml:"llc"`
 	Random        bool          `yaml:"random"`
 	ArpOpCode     int           `yaml:"arpop"`
@@ -117,10 +119,11 @@ type ResolvedConfig struct {
 	ExcludeFilePath  string
 
 	// Interface & Targets
-	IfaceName      string
-	UseLocalnet    bool
-	Numeric        bool
-	ExcludeTargets []string
+	IfaceName        string
+	UseLocalnet      bool
+	Numeric          bool
+	ExcludeTargets   []string
+	ExcludeBroadcast bool
 
 	// Scan Timing & Control
 	ScanTimeout   time.Duration

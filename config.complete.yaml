@@ -48,6 +48,10 @@ scan:
   # Intervalo mínimo entre paquetes (--interval). 'bandwidth' tiene prioridad.
   # interval: "1ms"
 
+  # Excluir direcciones de red y broadcast de CIDR, network:mask y --localnet.
+  # Por defecto false para coincidir con arp-scan (/24 => 256 objetivos).
+  exclude-broadcast: false
+
   # Factor de multiplicación del timeout en cada reintento (-b, --backoff).
   backoff: 1.5
 
@@ -107,8 +111,8 @@ spoofing:
 
 advanced:
   # ID de VLAN 802.1Q a usar en todos los escaneos (-Q, --vlan).
-  # 0 significa sin VLAN.
-  vlan: 0
+  # -1 significa sin VLAN; 0-4095 emite etiqueta VLAN 802.1Q.
+  vlan: -1
 
   # No mostrar respuestas duplicadas (-g, --ignoredups).
   ignoredups: false

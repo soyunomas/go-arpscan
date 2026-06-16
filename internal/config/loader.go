@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go-arpscan/internal/flagval"
+
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -198,6 +200,9 @@ func applyAppConfig(cmd *cobra.Command, cfg *ResolvedConfig, baseCfg *AppConfig)
 	if !cmd.Flags().Changed("random") && baseCfg.Scan.Random {
 		cfg.Random = true
 	}
+	if !cmd.Flags().Changed("exclude-broadcast") && baseCfg.Scan.ExcludeBroadcast {
+		cfg.ExcludeBroadcast = true
+	}
 	if !cmd.Flags().Changed("monitor") && baseCfg.Monitor.Enabled {
 		cfg.MonitorMode = true
 	}
@@ -261,8 +266,8 @@ func applyAppConfig(cmd *cobra.Command, cfg *ResolvedConfig, baseCfg *AppConfig)
 	if !cmd.Flags().Changed("macfile") && baseCfg.Files.MACFile != "" {
 		cfg.MACFilePath = baseCfg.Files.MACFile
 	}
-	if !cmd.Flags().Changed("vlan") && baseCfg.Advanced.Vlan > 0 {
-		cfg.VlanID = baseCfg.Advanced.Vlan
+	if !cmd.Flags().Changed("vlan") && baseCfg.Advanced.Vlan != nil {
+		cfg.VlanID = *baseCfg.Advanced.Vlan
 	}
 	if !cmd.Flags().Changed("arpspa") && baseCfg.Advanced.ArpSPA != "" {
 		cfg.ArpSPA = baseCfg.Advanced.ArpSPA
@@ -350,6 +355,9 @@ func applyProfile(cmd *cobra.Command, cfg *ResolvedConfig, profile *ProfileConfi
 	if !cmd.Flags().Changed("bandwidth") && !cmd.Flags().Changed("interval") && profile.Bandwidth != "" {
 		cfg.Bandwidth = profile.Bandwidth
 	}
+	if !cmd.Flags().Changed("vlan") && profile.Vlan != nil {
+		cfg.VlanID = *profile.Vlan
+	}
 	if !cmd.Flags().Changed("llc") && profile.LLC {
 		cfg.UseLLC = true
 	}
@@ -401,10 +409,11 @@ func loadFinalValuesFromFlags(cmd *cobra.Command, cfg *ResolvedConfig) {
 	cfg.FilePath, _ = cmd.Flags().GetString("file")
 	cfg.ExcludeTargets, _ = cmd.Flags().GetStringSlice("exclude")
 	cfg.ExcludeFilePath, _ = cmd.Flags().GetString("exclude-file")
+	cfg.ExcludeBroadcast, _ = cmd.Flags().GetBool("exclude-broadcast")
 	cfg.Numeric, _ = cmd.Flags().GetBool("numeric")
-	cfg.HostTimeout, _ = cmd.Flags().GetDuration("host-timeout")
+	cfg.HostTimeout = flagval.Get(cmd.Flags(), "host-timeout")
 	cfg.Retry, _ = cmd.Flags().GetInt("retry")
-	cfg.Interval, _ = cmd.Flags().GetDuration("interval")
+	cfg.Interval = flagval.Get(cmd.Flags(), "interval")
 	cfg.Bandwidth, _ = cmd.Flags().GetString("bandwidth")
 	cfg.BackoffFactor, _ = cmd.Flags().GetFloat64("backoff")
 	cfg.SpoofTargetIP, _ = cmd.Flags().GetString("spoof")

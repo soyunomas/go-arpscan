@@ -159,7 +159,7 @@ profiles:
 
   native-vlan-recon:
     description: "Inventories the native VLAN (untagged traffic)."
-    vlan: 0
+    vlan: -1
     progress: true
     rtt: true
     bandwidth: "5M"

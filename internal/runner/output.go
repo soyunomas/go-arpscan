@@ -65,7 +65,7 @@ func printResults(analyzed *AnalyzedResults, cfg *config.ResolvedConfig) {
 
 func printScanHeader(scancfg *scanner.Config, cfg *config.ResolvedConfig) {
 	log.Printf("Starting scan on interface %s (%s)", scancfg.Interface.Name, scancfg.Interface.HardwareAddr)
-	if scancfg.VlanID > 0 {
+	if scancfg.VlanID >= 0 {
 		log.Printf("Using VLAN tag: %d", scancfg.VlanID)
 	}
 	log.Printf("Targets to scan: %d IPs", len(scancfg.IPs))
