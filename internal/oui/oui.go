@@ -24,13 +24,18 @@ type VendorDB struct {
 	ouiBin *binDB
 }
 
-// NewVendorDB crea e inicializa una nueva base de datos de vendedores a partir de los ficheros.
-func NewVendorDB(ouiPath, iabPath, macPath string, verbosity int) (*VendorDB, error) {
-	db := &VendorDB{
+// NewEmptyVendorDB crea una DB vacía para modos que no imprimen vendor.
+func NewEmptyVendorDB() *VendorDB {
+	return &VendorDB{
 		customVendors: make(map[string]string),
 		iabVendors:    make(map[string]string),
 		ouiVendors:    make(map[string]string),
 	}
+}
+
+// NewVendorDB crea e inicializa una nueva base de datos de vendedores a partir de los ficheros.
+func NewVendorDB(ouiPath, iabPath, macPath string, verbosity int) (*VendorDB, error) {
+	db := NewEmptyVendorDB()
 
 	var err error
 

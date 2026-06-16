@@ -1,0 +1,178 @@
+################################################################################
+#                                                                              #
+#             Fichero de Perfiles Tácticos para go-arpscan                     #
+#                                                                              #
+#  Este fichero define perfiles de escaneo para mimetismo, evasión o pruebas.  #
+#  Activa un perfil usando el flag: --profile <nombre_del_perfil>              #
+#                                                                              #
+#  Ubicación por defecto: ~/.config/go-arpscan/profiles.yaml                   #
+#                                                                              #
+#  REGLA DE PRECEDENCIA:                                                       #
+#  Flags > Perfil > config.yaml > Defaults del programa                        #
+#                                                                              #
+################################################################################
+
+profiles:
+  # --- Perfiles de Mimetismo (Emulación de Dispositivos Comunes) ---
+
+  windows11-workstation:
+    description: "Emulates ARP traffic from a Windows 11 workstation (Intel NIC)."
+    arpsha: "3C:FD:FE:00:00:00" # OUI de Intel Corporation
+    srcaddr: "3C:FD:FE:00:00:00"
+    host-timeout: "1s"
+    retry: 2
+    backoff: 2.0
+
+  macos-ventura:
+    description: "Emulates ARP traffic from a MacBook running macOS Ventura (Broadcom/Apple NIC)."
+    arpsha: "F8:4D:89:00:00:00" # OUI de Apple, Inc.
+    srcaddr: "F8:4D:89:00:00:00"
+    host-timeout: "750ms"
+    retry: 3
+    backoff: 1.5
+
+  hp-officejet-printer:
+    description: "Impersonates an HP OfficeJet printer to blend in."
+    arpsha: "38:EA:A7:00:00:00" # OUI de Hewlett-Packard
+    srcaddr: "38:EA:A7:00:00:00"
+    host-timeout: "1.5s"
+    retry: 3
+    backoff: 2.5
+    llc: true
+
+  # --- Perfiles de Mimetismo de Infraestructura ---
+
+  cisco-ios-router:
+    description: "Emulates Cisco router behavior. Useful for avoiding suspicion."
+    arpsha: "00:00:0C:00:00:00" # OUI histórico de Cisco
+    srcaddr: "00:00:0C:00:00:00"
+    host-timeout: "200ms"
+    retry: 4
+    backoff: 1.2
+
+  vmware-esxi-hypervisor:
+    description: "Emulates a virtual NIC from a VMware ESXi server."
+    arpsha: "00:0C:29:00:00:00" # OUI de VMware, Inc.
+    srcaddr: "00:0C:29:00:00:00"
+    host-timeout: "300ms"
+    retry: 3
+    backoff: 1.5
+
+  android-phone-google-pixel:
+    description: "Blends in as a Google Pixel phone, common on corporate Wi-Fi networks."
+    arpsha: "D8:3A:DD:00:00:00" # OUI de Google, Inc.
+    srcaddr: "D8:3A:DD:00:00:00"
+    host-timeout: "900ms"
+    retry: 3
+    backoff: 1.8
+
+  # --- Perfiles Tácticos (Estrategias de Escaneo y Evasión) ---
+
+  stealth-scan-generic:
+    description: "Slow, low-profile scan to evade detection by basic monitoring systems."
+    retry: 1
+    host-timeout: "2s"
+    bandwidth: "64k"
+    random: true
+
+  ids-stress-test:
+    description: "Aggressive scan to test IDS/IPS alerts for ARP storms."
+    retry: 4
+    host-timeout: "100ms"
+    backoff: 1.2
+    bandwidth: "10M"
+    arpop: 2
+    padding: "41414141"
+
+  decoy-unsolicited-reply:
+    description: "Evasion technique. Announces our presence with an ARP Reply without receiving a Request."
+    arpop: 2
+    retry: 1
+    bandwidth: "128k"
+
+  resolve-and-confirm:
+    description: "High-reliability profile for resolving a single IP. Not stealthy, but accurate."
+    retry: 5
+    host-timeout: "250ms"
+    backoff: 2.0
+    bandwidth: "5M"
+
+  # --- Perfiles para Validación de Defensas y Diagnóstico Operacional ---
+
+  gateway-impersonation-test:
+    description: "Tests whether security systems (DAI) detect a gateway impersonation attempt."
+    arpop: 2
+    retry: 1
+    bandwidth: "256k"
+
+  malformed-packet-fuzz:
+    description: "Sends deliberately malformed ARP packets to test network stack resilience and IDS rules."
+    arphrd: 1
+    arppro: "0x0800"
+    arphln: 8
+    arppln: 6
+    padding: "DEADBEEFCAFE"
+
+  rogue-server-announcement:
+    description: "Emulates an unauthorized server announcing its presence to test network control policies."
+    arpop: 2
+    arpsha: "14:18:77:00:00:00"
+    srcaddr: "14:18:77:00:00:00"
+    retry: 3
+    interval: "1s"
+
+  nac-preflight-check:
+    description: "High-reliability check to confirm whether an IP is truly free before provisioning a device."
+    retry: 5
+    host-timeout: "100ms"
+    backoff: 1.2
+    bandwidth: "10M"
+
+  rapid-subnet-inventory:
+    description: "Optimized for fast and complete subnet inventory. Ideal for an initial overview."
+    retry: 2
+    host-timeout: "300ms"
+    bandwidth: "8M"
+    progress: true
+    rtt: true
+    random: true
+
+  # --- Perfiles para Sondeo y Explotación de VLANs ---
+
+  vlan-discovery-optimized:
+    description: "Profile optimized for VLAN sweeping loops. Quiet and fast."
+    retry: 1
+    host-timeout: "250ms"
+    quiet: true
+    # USO: Este perfil debe ser invocado desde un script para barrer un rango de VLANs.
+    # Ejemplo en Bash:
+    # for vlan in {1..1024}; do
+    #   printf "[*] Probando VLAN %d...\n" "$vlan"
+    #   sudo go-arpscan --profile vlan-discovery-optimized --vlan "$vlan" --localnet
+    # done
+
+  double-tagging-hop-probe:
+    description: "Attempts a double-tagging VLAN hopping attack against VLAN 1 (common native VLAN)."
+    vlan: 1
+    retry: 2
+    host-timeout: "500ms"
+
+  native-vlan-recon:
+    description: "Inventories the native VLAN (untagged traffic)."
+    vlan: -1
+    progress: true
+    rtt: true
+    bandwidth: "5M"
+
+  voip-vlan-scan:
+    description: "Looks for devices on a common Voice over IP (VoIP) VLAN, often a high-value target (ID 100)."
+    vlan: 100
+    progress: true
+    rtt: true
+
+  guest-wifi-escape-probe:
+    description: "Tests VLAN escape from a guest network toward a sensitive corporate VLAN (ID 10)."
+    vlan: 10
+    retry: 3
+    host-timeout: "750ms"
+    random: true

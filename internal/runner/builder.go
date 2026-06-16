@@ -182,8 +182,7 @@ func buildScannerConfig(cfg *config.ResolvedConfig, args []string) (*scanner.Con
 		// En modo silencioso (--quiet/-q) se evita por completo la descarga, verificación o carga de
 		// los archivos de vendors (OUI/IAB) para reducir drásticamente el consumo de memoria,
 		// evitar retrasos de red y permitir ejecuciones seguras offline sin advertencias.
-		// Inicializamos un VendorDB vacío para evitar pánicos por puntero nulo en otros paths.
-		vendorDB, _ = oui.NewVendorDB("", "", "", 0)
+		vendorDB = oui.NewEmptyVendorDB()
 	}
 
 	// --- Configuración de Tiempos y Ancho de Banda ---

@@ -13,8 +13,8 @@ INSTALL_CFG_DIR := /etc/$(APP_NAME)
 
 # --- Versionado limpio ---
 # --- Version fija ---
-VERSION     := v1.3.0
-DEB_VERSION := 1.3.0
+VERSION     := v1.4.0
+DEB_VERSION := 1.4.0
 
 # Metadata separada (NO contamina la versión)
 COMMIT_HASH   := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")

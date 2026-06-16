@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,6 +140,26 @@ func parseARPPacket(data []byte) int {
 	return -1
 }
 
+func sleepUntil(deadline time.Time, ctx context.Context) {
+	d := time.Until(deadline)
+	if d <= 0 {
+		return
+	}
+	if d < 100*time.Microsecond {
+		// Busy-wait with yields. Zero allocations.
+		for time.Now().Before(deadline) {
+			runtime.Gosched()
+		}
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
 func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	// Timeout corto (10ms) para evitar bloqueo de goroutine al salir
 	handle, err := pcap.OpenLive(cfg.Interface.Name, int32(cfg.Snaplen), true, 10*time.Millisecond)
@@ -160,7 +181,6 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	}
 
 	results := make(chan ScanResult, 100) // Buffer pequeño
-	jobs := make(chan net.IP, numSenders)
 
 	go func() {
 		defer close(results)
@@ -194,22 +214,32 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 
 		var wgListener sync.WaitGroup
 		wgListener.Add(1)
-		go listener(ctx, &wgListener, handle, cfg, targets, results, pcapWriter, &pendingTargets)
+		go listener(ctx, &wgListener, handle, cfg, targets, results, pcapWriter, &pendingTargets, cancel)
 
-		var wgSenders sync.WaitGroup
 		ifaceIPNet, err := GetSrcIPNet(cfg.Interface)
 		if err != nil {
 			log.Printf("CRITICAL: could not get interface IP: %v", err)
 			cancel()
-		} else {
-			for i := 0; i < numSenders; i++ {
-				wgSenders.Add(1)
-				go sender(ctx, &wgSenders, handle, cfg, jobs, ifaceIPNet)
-			}
+			return
 		}
 
-		ticker := time.NewTicker(cfg.Interval)
-		defer ticker.Stop()
+		ifaceIPv4 := ifaceIPNet.IP.To4()
+		if ifaceIPv4 == nil {
+			log.Printf("CRITICAL: interface has no IPv4 address")
+			cancel()
+			return
+		}
+
+		var hostPart [net.IPv4len]byte
+		copy(hostPart[:], ifaceIPv4)
+		for i := 0; i < net.IPv4len; i++ {
+			hostPart[i] &^= ifaceIPNet.Mask[i]
+		}
+
+		packetBuilder := newStandardPacketBuilder(handle, cfg.Interface, cfg)
+		var sourceIPStorage [net.IPv4len]byte
+
+		nextPacketTime := time.Now()
 
 	main_loop:
 		for pass := 0; pass < cfg.Retry; pass++ {
@@ -225,18 +255,51 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 				if atomic.LoadInt32(&t.Status) == StatusReplied {
 					continue
 				}
+
+				now := time.Now()
+				if now.Before(nextPacketTime) {
+					sleepUntil(nextPacketTime, ctx)
+				}
+
 				select {
-				case <-ticker.C:
-					atomic.CompareAndSwapInt32(&t.Status, StatusPending, StatusSent)
-					atomic.StoreInt64(&t.LastSent, time.Now().UnixNano())
-					select {
-					case jobs <- t.IP:
-					case <-ctx.Done():
-						break main_loop
-					}
 				case <-ctx.Done():
 					break main_loop
+				default:
 				}
+
+				atomic.CompareAndSwapInt32(&t.Status, StatusPending, StatusSent)
+				atomic.StoreInt64(&t.LastSent, time.Now().UnixNano())
+
+				dstIPv4 := t.IP.To4()
+				if dstIPv4 != nil {
+					var sourceIP net.IP
+					if cfg.ArpSPADest {
+						sourceIP = dstIPv4
+					} else if cfg.ArpSPA != nil {
+						sourceIP = cfg.ArpSPA.To4()
+					} else {
+						dstMask := dstIPv4.DefaultMask()
+						if dstMask == nil {
+							dstMask = net.CIDRMask(24, 32)
+						}
+						for i := 0; i < net.IPv4len; i++ {
+							sourceIPStorage[i] = (dstIPv4[i] & dstMask[i]) | hostPart[i]
+						}
+						sourceIP = sourceIPStorage[:]
+					}
+
+					if cfg.Verbosity >= 2 {
+						log.Printf("Sending ARP to %d.%d.%d.%d from %d.%d.%d.%d",
+							dstIPv4[0], dstIPv4[1], dstIPv4[2], dstIPv4[3],
+							sourceIP[0], sourceIP[1], sourceIP[2], sourceIP[3])
+					}
+					packetBuilder.send(sourceIP, dstIPv4)
+					if cfg.ProgressBar != nil {
+						cfg.ProgressBar.Add(1)
+					}
+				}
+
+				nextPacketTime = nextPacketTime.Add(cfg.Interval)
 			}
 
 			remaining := atomic.LoadInt64(&pendingTargets)
@@ -262,9 +325,6 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 			}
 		}
 
-		close(jobs)
-		wgSenders.Wait()
-
 		cancel() // Cancelamos contexto de listener explícitamente
 		wgListener.Wait()
 	}()
@@ -272,67 +332,138 @@ func StartScan(cfg *Config) (<-chan ScanResult, error) {
 	return results, nil
 }
 
-// sender procesa el envío de paquetes.
-func sender(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, jobs <-chan net.IP, ifaceIPNet *net.IPNet) {
-	defer wg.Done()
+type standardPacketBuilder struct {
+	handle *pcap.Handle
+	cfg    *Config
+	buf    gopacket.SerializeBuffer
+	opts   gopacket.SerializeOptions
 
-	ifaceIPv4 := ifaceIPNet.IP.To4()
-	if ifaceIPv4 == nil {
+	broadcastMAC [6]byte
+	zeroMAC      [6]byte
+	snapOUI      [3]byte
+	sourceIP     [net.IPv4len]byte
+	targetIP     [net.IPv4len]byte
+
+	eth   layers.Ethernet
+	arp   layers.ARP
+	llc   layers.LLC
+	snap  layers.SNAP
+	dot1q layers.Dot1Q
+
+	layers     [6]gopacket.SerializableLayer
+	layerCount int
+}
+
+func newStandardPacketBuilder(handle *pcap.Handle, iface *net.Interface, cfg *Config) *standardPacketBuilder {
+	b := &standardPacketBuilder{
+		handle:       handle,
+		cfg:          cfg,
+		buf:          gopacket.NewSerializeBuffer(),
+		opts:         gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true},
+		broadcastMAC: [6]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+		llc:          layers.LLC{DSAP: 0xAA, SSAP: 0xAA, Control: 0x03},
+	}
+
+	sourceEthMAC := iface.HardwareAddr
+	if cfg.EthSrcMAC != nil {
+		sourceEthMAC = cfg.EthSrcMAC
+	}
+	destinationEthMAC := net.HardwareAddr(b.broadcastMAC[:])
+	if cfg.EthDstMAC != nil {
+		destinationEthMAC = cfg.EthDstMAC
+	}
+	sourceArpSHA := iface.HardwareAddr
+	if cfg.ArpSHA != nil {
+		sourceArpSHA = cfg.ArpSHA
+	}
+	destinationArpTHA := b.zeroMAC[:]
+	if cfg.ArpTHA != nil {
+		destinationArpTHA = []byte(cfg.ArpTHA)
+	}
+
+	b.eth = layers.Ethernet{
+		SrcMAC:       sourceEthMAC,
+		DstMAC:       destinationEthMAC,
+		EthernetType: layers.EthernetType(cfg.EthernetPrototype),
+	}
+	b.arp = layers.ARP{
+		AddrType:          layers.LinkType(cfg.ArpHardwareType),
+		Protocol:          layers.EthernetType(cfg.ArpProtocolType),
+		HwAddressSize:     cfg.ArpHardwareLen,
+		ProtAddressSize:   cfg.ArpProtocolLen,
+		Operation:         cfg.ArpOpCode,
+		SourceHwAddress:   []byte(sourceArpSHA),
+		SourceProtAddress: b.sourceIP[:],
+		DstHwAddress:      destinationArpTHA,
+		DstProtAddress:    b.targetIP[:],
+	}
+	b.snap = layers.SNAP{
+		OrganizationalCode: b.snapOUI[:],
+		Type:               layers.EthernetType(cfg.EthernetPrototype),
+	}
+
+	if cfg.UseLLC {
+		if cfg.VlanID >= 0 {
+			b.eth.EthernetType = layers.EthernetTypeDot1Q
+			b.dot1q = layers.Dot1Q{VLANIdentifier: uint16(cfg.VlanID)}
+			b.addLayer(&b.eth)
+			b.addLayer(&b.dot1q)
+			b.addLayer(&b.llc)
+			b.addLayer(&b.snap)
+			b.addLayer(&b.arp)
+		} else {
+			b.addLayer(&b.eth)
+			b.addLayer(&b.llc)
+			b.addLayer(&b.snap)
+			b.addLayer(&b.arp)
+		}
+	} else {
+		if cfg.VlanID >= 0 {
+			b.eth.EthernetType = layers.EthernetTypeDot1Q
+			b.dot1q = layers.Dot1Q{VLANIdentifier: uint16(cfg.VlanID), Type: layers.EthernetType(cfg.EthernetPrototype)}
+			b.addLayer(&b.eth)
+			b.addLayer(&b.dot1q)
+			b.addLayer(&b.arp)
+		} else {
+			b.addLayer(&b.eth)
+			b.addLayer(&b.arp)
+		}
+	}
+	if len(cfg.PaddingData) > 0 {
+		b.addLayer(gopacket.Payload(cfg.PaddingData))
+	}
+
+	return b
+}
+
+func (b *standardPacketBuilder) addLayer(layer gopacket.SerializableLayer) {
+	b.layers[b.layerCount] = layer
+	b.layerCount++
+}
+
+func (b *standardPacketBuilder) send(srcIP, dstIP net.IP) {
+	packetData, err := b.serialize(srcIP, dstIP)
+	if err != nil {
 		return
 	}
-	hostPart := make(net.IP, net.IPv4len)
-	copy(hostPart, ifaceIPv4)
-	for i := 0; i < net.IPv4len; i++ {
-		hostPart[i] &^= ifaceIPNet.Mask[i]
-	}
-
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case dstIP, ok := <-jobs:
-			if !ok {
-				return
-			}
-			dstIPv4 := dstIP.To4()
-			if dstIPv4 == nil {
-				continue
-			}
-
-			var sourceIP net.IP
-			if cfg.ArpSPADest {
-				sourceIP = dstIPv4
-			} else if cfg.ArpSPA != nil {
-				sourceIP = cfg.ArpSPA.To4()
-			} else {
-				dstMask := dstIPv4.DefaultMask()
-				if dstMask == nil {
-					dstMask = net.CIDRMask(24, 32)
-				}
-				networkPart := dstIPv4.Mask(dstMask)
-				sourceIP = make(net.IP, net.IPv4len)
-				for i := 0; i < net.IPv4len; i++ {
-					sourceIP[i] = networkPart[i] | hostPart[i]
-				}
-			}
-
-			if cfg.Verbosity >= 2 {
-				log.Printf("Sending ARP to %s from %s", dstIPv4, sourceIP)
-			}
-			sendARP(handle, cfg.Interface, cfg, sourceIP, dstIPv4, buf, opts)
-			buf.Clear()
-			if cfg.ProgressBar != nil {
-				cfg.ProgressBar.Add(1)
-			}
-		}
+	if err := b.handle.WritePacketData(packetData); err != nil && b.cfg.Verbosity >= 2 {
+		log.Printf("Error sending: %v", err)
 	}
 }
 
+func (b *standardPacketBuilder) serialize(srcIP, dstIP net.IP) ([]byte, error) {
+	copy(b.sourceIP[:], srcIP.To4())
+	copy(b.targetIP[:], dstIP.To4())
+
+	b.buf.Clear()
+	if err := gopacket.SerializeLayers(b.buf, b.opts, b.layers[:b.layerCount]...); err != nil {
+		return nil, err
+	}
+	return b.buf.Bytes(), nil
+}
+
 // listener recibe paquetes utilizando el parser manual multi-formato de alto rendimiento.
-func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[[4]byte]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer, pendingTargets *int64) {
+func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg *Config, targets map[[4]byte]*Target, results chan<- ScanResult, pcapWriter *pcapgo.Writer, pendingTargets *int64, cancel context.CancelFunc) {
 	defer wg.Done()
 
 	for {
@@ -395,7 +526,9 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 
 			if atomic.CompareAndSwapInt32(&target.Status, StatusSent, StatusReplied) ||
 				atomic.CompareAndSwapInt32(&target.Status, StatusPending, StatusReplied) {
-				atomic.AddInt64(pendingTargets, -1)
+				if atomic.AddInt64(pendingTargets, -1) == 0 {
+					cancel()
+				}
 				if cfg.Verbosity >= 2 {
 					log.Printf("Target %s replied. RTT: %v", srcIPStr, rtt)
 				}
@@ -403,83 +536,6 @@ func listener(ctx context.Context, wg *sync.WaitGroup, handle *pcap.Handle, cfg 
 
 			vendor := cfg.VendorDB.Lookup(srcMACStr)
 			results <- ScanResult{IP: srcIPStr, MAC: srcMACStr, RTT: rtt, Vendor: vendor}
-		}
-	}
-}
-
-func sendARP(handle *pcap.Handle, iface *net.Interface, cfg *Config, srcIP, dstIP net.IP, buf gopacket.SerializeBuffer, opts gopacket.SerializeOptions) {
-	var sourceEthMAC, destinationEthMAC, sourceArpSHA net.HardwareAddr
-	if cfg.EthSrcMAC != nil {
-		sourceEthMAC = cfg.EthSrcMAC
-	} else {
-		sourceEthMAC = iface.HardwareAddr
-	}
-	if cfg.EthDstMAC != nil {
-		destinationEthMAC = cfg.EthDstMAC
-	} else {
-		destinationEthMAC = net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
-	}
-	if cfg.ArpSHA != nil {
-		sourceArpSHA = cfg.ArpSHA
-	} else {
-		sourceArpSHA = iface.HardwareAddr
-	}
-
-	var destinationArpTHA []byte
-	if cfg.ArpTHA != nil {
-		destinationArpTHA = []byte(cfg.ArpTHA)
-	} else {
-		destinationArpTHA = []byte{0, 0, 0, 0, 0, 0}
-	}
-
-	eth := layers.Ethernet{
-		SrcMAC:       sourceEthMAC,
-		DstMAC:       destinationEthMAC,
-		EthernetType: layers.EthernetType(cfg.EthernetPrototype),
-	}
-	arp := layers.ARP{
-		AddrType:          layers.LinkType(cfg.ArpHardwareType),
-		Protocol:          layers.EthernetType(cfg.ArpProtocolType),
-		HwAddressSize:     cfg.ArpHardwareLen,
-		ProtAddressSize:   cfg.ArpProtocolLen,
-		Operation:         cfg.ArpOpCode,
-		SourceHwAddress:   []byte(sourceArpSHA),
-		SourceProtAddress: []byte(srcIP.To4()),
-		DstHwAddress:      destinationArpTHA,
-		DstProtAddress:    []byte(dstIP.To4()),
-	}
-
-	var layersToSerialize []gopacket.SerializableLayer
-	layersToSerialize = make([]gopacket.SerializableLayer, 0, 5)
-
-	if cfg.UseLLC {
-		llc := layers.LLC{DSAP: 0xAA, SSAP: 0xAA, Control: 0x03}
-		snap := layers.SNAP{OrganizationalCode: []byte{0x00, 0x00, 0x00}, Type: layers.EthernetType(cfg.EthernetPrototype)}
-		if cfg.VlanID >= 0 {
-			eth.EthernetType = layers.EthernetTypeDot1Q
-			dot1q := layers.Dot1Q{VLANIdentifier: uint16(cfg.VlanID)}
-			layersToSerialize = append(layersToSerialize, &eth, &dot1q, &llc, &snap, &arp)
-		} else {
-			layersToSerialize = append(layersToSerialize, &eth, &llc, &snap, &arp)
-		}
-	} else {
-		if cfg.VlanID >= 0 {
-			eth.EthernetType = layers.EthernetTypeDot1Q
-			dot1q := layers.Dot1Q{VLANIdentifier: uint16(cfg.VlanID), Type: layers.EthernetType(cfg.EthernetPrototype)}
-			layersToSerialize = append(layersToSerialize, &eth, &dot1q, &arp)
-		} else {
-			layersToSerialize = append(layersToSerialize, &eth, &arp)
-		}
-	}
-	if len(cfg.PaddingData) > 0 {
-		layersToSerialize = append(layersToSerialize, gopacket.Payload(cfg.PaddingData))
-	}
-	if err := gopacket.SerializeLayers(buf, opts, layersToSerialize...); err != nil {
-		return
-	}
-	if err := handle.WritePacketData(buf.Bytes()); err != nil {
-		if cfg.Verbosity >= 2 {
-			log.Printf("Error sending: %v", err)
 		}
 	}
 }

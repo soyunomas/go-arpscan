@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+  command -v setcap >/dev/null && setcap cap_net_raw,cap_net_admin+eip /usr/local/bin/go-arpscan || true
+fi

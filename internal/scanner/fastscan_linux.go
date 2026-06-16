@@ -210,15 +210,15 @@ func StartFastScan(cfg *Config) (<-chan ScanResult, error) {
 			if cfg.Verbosity >= 1 {
 				log.Printf("fastscan: TPACKET RX_RING unavailable (%v); using recvfrom", err)
 			}
-			go runRX(ctx, rc, &ownMAC, targets, index, &pending, cfg, results, rxDone, rxCPU)
+			go runRX(ctx, rc, &ownMAC, targets, index, &pending, cfg, results, rxDone, rxCPU, cancel)
 		} else {
 			if cfg.Verbosity >= 1 {
 				log.Println("fastscan: RX engine = TPACKET_V3 RX_RING (zero-copy mmap).")
 			}
-			go runRXRing(ctx, rc, ring, &ownMAC, targets, index, &pending, cfg, results, rxDone, rxCPU)
+			go runRXRing(ctx, rc, ring, &ownMAC, targets, index, &pending, cfg, results, rxDone, rxCPU, cancel)
 		}
 	} else {
-		go runRX(ctx, rc, &ownMAC, targets, index, &pending, cfg, results, rxDone, rxCPU)
+		go runRX(ctx, rc, &ownMAC, targets, index, &pending, cfg, results, rxDone, rxCPU, cancel)
 	}
 
 	// TX goroutine — pinneada, dirige las pasadas y backoff. Por defecto usa
@@ -279,6 +279,7 @@ func runRX(
 	results chan<- ScanResult,
 	done chan<- struct{},
 	cpu int,
+	cancel context.CancelFunc,
 ) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -308,7 +309,7 @@ func runRX(
 		if n == 0 {
 			continue // timeout
 		}
-		processARPReply(buf[:n], ownMAC, targets, index, pending, cfg, results)
+		processARPReply(buf[:n], ownMAC, targets, index, pending, cfg, results, cancel)
 	}
 }
 
@@ -328,6 +329,7 @@ func runRXRing(
 	results chan<- ScanResult,
 	done chan<- struct{},
 	cpu int,
+	cancel context.CancelFunc,
 ) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -336,7 +338,7 @@ func runRXRing(
 	pinCurrentThreadTo(cpu, cfg.Verbosity)
 
 	cb := func(payload []byte) {
-		processARPReply(payload, ownMAC, targets, index, pending, cfg, results)
+		processARPReply(payload, ownMAC, targets, index, pending, cfg, results, cancel)
 	}
 
 	for {
@@ -360,8 +362,6 @@ func runRXRing(
 //
 // `pkt` puede apuntar a un buffer en stack (recvfrom) o a la mmap del
 // PACKET_MMAP (zero-copy). En ambos casos NO debe escribirse.
-//
-//go:nosplit
 func processARPReply(
 	pkt []byte,
 	ownMAC *[6]byte,
@@ -370,6 +370,7 @@ func processARPReply(
 	pending *int64,
 	cfg *Config,
 	results chan<- ScanResult,
+	cancel context.CancelFunc,
 ) {
 	if len(pkt) < 42 {
 		return // trama demasiado corta para Eth+ARP
@@ -404,7 +405,9 @@ func processARPReply(
 		}
 		return
 	}
-	atomic.AddInt64(pending, -1)
+	if atomic.AddInt64(pending, -1) == 0 {
+		cancel()
+	}
 
 	var rtt time.Duration
 	if sentNs := atomic.LoadInt64(&t.sentNs); sentNs != 0 {
@@ -669,25 +672,4 @@ func sleepCtx(d time.Duration, ctx context.Context) bool {
 	}
 }
 
-// sleepUntil duerme hasta `deadline` o sale antes si ctx se cancela.
-// Para esperas <100µs evita time.Timer (que asigna) usando busy-wait con
-// runtime.Gosched para ceder voluntariamente *[Regla 56]*.
-func sleepUntil(deadline time.Time, ctx context.Context) {
-	d := time.Until(deadline)
-	if d <= 0 {
-		return
-	}
-	if d < 100*time.Microsecond {
-		// Busy-wait con yields. Cero asignaciones.
-		for time.Now().Before(deadline) {
-			runtime.Gosched()
-		}
-		return
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-	case <-ctx.Done():
-	}
-}
+
